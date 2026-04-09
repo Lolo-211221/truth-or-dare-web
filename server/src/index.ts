@@ -24,6 +24,11 @@ const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const PORT = Number(process.env.PORT) || 3001;
 const RATE_WINDOW_MS = 60_000;
 const RATE_MAX_JOINS = 30;
+/** How long everyone can read a Truth answer before the next card (ms). Override with TRUTH_ANSWER_DISPLAY_MS. */
+const TRUTH_ANSWER_DISPLAY_MS = Math.min(
+  120_000,
+  Math.max(3000, Number(process.env.TRUTH_ANSWER_DISPLAY_MS) || 10_000),
+);
 
 interface InternalCard {
   kind: CardKind;
@@ -45,6 +50,8 @@ interface InternalRoom {
   deck: InternalCard[];
   currentCardIndex: number;
   truthAnswer: string | null;
+  /** When the next card will auto-advance after a Truth answer (server time ms) */
+  truthAdvanceAt: number | null;
   /** Prevents double advance (truth timeout / dare tap) */
   pendingAdvance: boolean;
 }
@@ -115,6 +122,7 @@ function toRoomState(room: InternalRoom): RoomState {
     currentCardIndex: room.currentCardIndex,
     activePlayerId: activePlayerId(room),
     truthAnswer: room.truthAnswer,
+    truthAdvanceAt: room.truthAdvanceAt,
   };
 }
 
@@ -199,6 +207,7 @@ function leaveRoom(io: Server, socketId: string) {
       room.deck = [];
       room.currentCardIndex = 0;
       room.truthAnswer = null;
+      room.truthAdvanceAt = null;
       room.pendingAdvance = false;
       room.submitted.clear();
       room.cardStorage.clear();
@@ -288,6 +297,7 @@ io.on('connection', (socket) => {
       deck: [],
       currentCardIndex: 0,
       truthAnswer: null,
+      truthAdvanceAt: null,
       pendingAdvance: false,
     };
     rooms.set(code, room);
@@ -424,6 +434,7 @@ io.on('connection', (socket) => {
     room.phase = 'shuffling';
     room.currentCardIndex = 0;
     room.truthAnswer = null;
+    room.truthAdvanceAt = null;
     room.pendingAdvance = false;
     ioSrv.to(code).emit('room_state', toRoomState(room));
 
@@ -504,6 +515,7 @@ io.on('connection', (socket) => {
     }
 
     room.truthAnswer = text;
+    room.truthAdvanceAt = Date.now() + TRUTH_ANSWER_DISPLAY_MS;
     room.pendingAdvance = true;
     io.to(code).emit('room_state', toRoomState(room));
 
@@ -513,7 +525,7 @@ io.on('connection', (socket) => {
         r.pendingAdvance = false;
         advanceCard(io, r);
       }
-    }, 400);
+    }, TRUTH_ANSWER_DISPLAY_MS);
     ack?.({ ok: true });
   });
 
@@ -557,6 +569,7 @@ io.on('connection', (socket) => {
 function advanceCard(ioSrv: Server, room: InternalRoom) {
   const code = room.code;
   room.truthAnswer = null;
+  room.truthAdvanceAt = null;
   room.currentCardIndex += 1;
 
   if (room.currentCardIndex >= room.deck.length) {

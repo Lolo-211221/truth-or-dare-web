@@ -44,6 +44,7 @@ export default function RoomPage() {
   const [truths, setTruths] = useState<string[]>(() => Array(TRUTHS_PER_PLAYER).fill(''));
   const [dares, setDares] = useState<string[]>(() => Array(DARES_PER_PLAYER).fill(''));
   const [truthAnswer, setTruthAnswer] = useState('');
+  const [nowTick, setNowTick] = useState(() => Date.now());
 
   useEffect(() => {
     ensureConnected();
@@ -56,6 +57,12 @@ export default function RoomPage() {
       socket.off('disconnect', onDisconnect);
     };
   }, []);
+
+  useEffect(() => {
+    if (state?.truthAdvanceAt == null) return;
+    const id = setInterval(() => setNowTick(Date.now()), 500);
+    return () => clearInterval(id);
+  }, [state?.truthAdvanceAt]);
 
   useEffect(() => {
     const onState = (s: RoomState) => {
@@ -106,6 +113,11 @@ export default function RoomPage() {
     if (!state || !myId) return false;
     return state.hostId === myId;
   }, [state, myId]);
+
+  const truthSecondsLeft =
+    state?.truthAdvanceAt == null
+      ? null
+      : Math.max(0, Math.ceil((state.truthAdvanceAt - nowTick) / 1000));
 
   const hostToken = sessionStorage.getItem(hostTokenKey(roomCode)) ?? '';
 
@@ -360,6 +372,13 @@ export default function RoomPage() {
                       Answer
                     </p>
                     <p style={{ margin: '0.35rem 0 0' }}>{state.truthAnswer}</p>
+                    {truthSecondsLeft != null ? (
+                      <p className="muted" style={{ margin: '0.75rem 0 0', fontSize: '0.9rem' }}>
+                        {truthSecondsLeft > 0
+                          ? `Next card in ${truthSecondsLeft}s — time to read.`
+                          : 'Next card…'}
+                      </p>
+                    ) : null}
                   </div>
                 ) : iAmActive ? (
                   <>

@@ -51,6 +51,8 @@ This builds the React app into `client/dist`, then runs `node server/dist/index.
 
 If the site shows **“Application failed to respond”** on Railway, it was often **binding to localhost only** (fixed in server code) or **skipping the client build** so nothing useful is served — check deploy logs for `Static UI: ...`.
 
+**Truth answer read time:** after someone submits a Truth, the next card waits **10 seconds** by default so everyone can read. Override on the server with env **`TRUTH_ANSWER_DISPLAY_MS`** (milliseconds, clamped between 3000 and 120000).
+
 No separate static host is required: one Node process serves both the SPA and real-time traffic.
 
 ### Netlify (frontend only)

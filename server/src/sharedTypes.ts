@@ -22,6 +22,7 @@ export interface RoomState {
   currentCardIndex: number;
   activePlayerId: string | null;
   truthAnswer: string | null;
+  truthAdvanceAt: number | null;
 }
 
 export const TRUTHS_PER_PLAYER = 2;

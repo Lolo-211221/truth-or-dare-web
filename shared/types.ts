@@ -27,6 +27,8 @@ export interface RoomState {
   activePlayerId: string | null;
   /** After a Truth is answered, shown until next card */
   truthAnswer: string | null;
+  /** Unix ms: next card advances after this moment (Truth reveal only); null otherwise */
+  truthAdvanceAt: number | null;
 }
 
 export const TRUTHS_PER_PLAYER = 2;
