@@ -208,9 +208,22 @@ function leaveRoom(io: Server, socketId: string) {
   io.to(code).emit('room_state', toRoomState(room));
 }
 
+/** Monorepo + Railway: cwd may be repo root or `server/`; built files live at `client/dist`. */
+function resolveClientDistDir(): string {
+  const candidates = [
+    path.resolve(process.cwd(), 'client', 'dist'),
+    path.resolve(process.cwd(), '..', 'client', 'dist'),
+    path.join(__dirname, '..', '..', 'client', 'dist'),
+  ];
+  for (const dir of candidates) {
+    if (fs.existsSync(path.join(dir, 'index.html'))) return dir;
+  }
+  return candidates[candidates.length - 1]!;
+}
+
 const app = express();
 app.use(cors());
-const clientDist = path.join(__dirname, '../../client/dist');
+const clientDist = resolveClientDistDir();
 if (fs.existsSync(path.join(clientDist, 'index.html'))) {
   app.use(express.static(clientDist));
   app.use((req, res, next) => {
