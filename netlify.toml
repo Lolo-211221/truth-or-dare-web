@@ -1,0 +1,11 @@
+# Static frontend only. Run the Socket.IO API elsewhere (Railway, Render, Fly, etc.)
+# and set VITE_SOCKET_URL in Netlify → Site configuration → Environment variables.
+
+[build]
+  command = "npm ci && npm run build -w client"
+  publish = "client/dist"
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

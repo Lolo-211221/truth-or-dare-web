@@ -1,0 +1,32 @@
+export type Phase = 'lobby' | 'writingCards' | 'shuffling' | 'turn' | 'finished';
+
+export type CardKind = 'truth' | 'dare';
+
+export interface PublicDeckCard {
+  kind: CardKind;
+  text: string;
+}
+
+export interface Player {
+  id: string;
+  name: string;
+}
+
+export interface RoomState {
+  roomCode: string;
+  phase: Phase;
+  players: Player[];
+  hostId: string;
+  submittedPlayerIds: string[];
+  deck: PublicDeckCard[];
+  currentCardIndex: number;
+  activePlayerId: string | null;
+  truthAnswer: string | null;
+}
+
+export const TRUTHS_PER_PLAYER = 2;
+export const DARES_PER_PLAYER = 2;
+export const MAX_CARD_TEXT_LENGTH = 200;
+export const MAX_PLAYERS_PER_ROOM = 20;
+export const MAX_PLAYER_NAME_LENGTH = 24;
+export const ROOM_CODE_LENGTH = 6;
