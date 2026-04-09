@@ -1,4 +1,4 @@
-export type GameMode = 'sharedDeck' | 'pickAndWrite';
+export type GameMode = 'sharedDeck' | 'pickAndWrite' | 'neverHaveIEver' | 'mostLikelyTo';
 
 export type Phase =
   | 'lobby'
@@ -10,7 +10,7 @@ export type Phase =
   | 'revealTurn'
   | 'finished';
 
-export type CardKind = 'truth' | 'dare';
+export type CardKind = 'truth' | 'dare' | 'nhie' | 'mlt';
 
 /** Shown to clients (no author) */
 export interface PublicDeckCard {
@@ -29,6 +29,45 @@ export interface Player {
   name: string;
 }
 
+export type ReactionCategory = 'funny' | 'savage' | 'chaotic';
+
+export type MostLikelyCategory = 'spicy' | 'dumb' | 'college' | 'embarrassing';
+
+export interface TeamInfo {
+  id: string;
+  name: string;
+}
+
+/** Active secret vote (per-viewer fields filled server-side). */
+export interface VoteSessionState {
+  id: string;
+  question: string;
+  candidateIds: string[];
+  /** Team mode: candidates are team ids */
+  mode: 'players' | 'teams';
+  allowSelfVote: boolean;
+  revealed: boolean;
+  /** How many players have voted (before reveal) */
+  voteCount: number;
+  /** After reveal */
+  tallies?: Record<string, number>;
+  /** After reveal: voterId -> candidateId */
+  votes?: Record<string, string>;
+  /** Current socket already cast a vote */
+  youVoted: boolean;
+}
+
+export interface PartyMomentPayload {
+  id: string;
+  category: ReactionCategory;
+  title: string;
+  imageUrl: string;
+  /** 'tick' | 'drum' | 'airhorn' — client maps to sounds */
+  sound: 'tick' | 'drum' | 'airhorn';
+  shake?: boolean;
+  confetti?: boolean;
+}
+
 /** Host-adjustable before the game starts (lobby only). */
 export interface RoomSettings {
   /** sharedDeck: truths each person writes */
@@ -41,6 +80,16 @@ export interface RoomSettings {
   authorPromptMs: number;
   /** pickAndWrite: how many full passes through all players (each person gets a turn per pass) */
   pickCycles: number;
+  /** 0 = off; otherwise seconds for pickType / turn / revealTurn action window */
+  turnTimerSeconds: number;
+  /** When > 0 and turnTimerSeconds is "custom", clamped 5–300 */
+  turnTimerCustomSeconds: number;
+  /** Split players into two teams; scoring & team votes when enabled */
+  teamsEnabled: boolean;
+  /** Default on for party votes; host can toggle per vote */
+  preventSelfVoteDefault: boolean;
+  /** Weighted random for built-in question picks (future packs / MLT) */
+  mostLikelyCategory: MostLikelyCategory;
 }
 
 export interface RoomState {
@@ -73,6 +122,23 @@ export interface RoomState {
   /** pickAndWrite: 0-based turn counter */
   pickAuthorRound: number;
   settings: RoomSettings;
+
+  /** Host can block new joins while in lobby */
+  roomLocked: boolean;
+  /** Optional per-turn wall clock; client shows countdown */
+  turnEndsAt: number | null;
+
+  teams: TeamInfo[];
+  /** playerId -> teamId */
+  playerTeamId: Record<string, string>;
+  teamScores: Record<string, number>;
+  /** Full-screen team splash before starting */
+  teamRevealActive: boolean;
+
+  voteSession: VoteSessionState | null;
+
+  /** Recent card indices to reduce immediate repeats (shared deck) */
+  deckRecentIndices: number[];
 }
 
 /** Defaults when creating a room; server may seed ms from env. */
@@ -82,9 +148,15 @@ export const DEFAULT_ROOM_SETTINGS: RoomSettings = {
   truthAnswerDisplayMs: 10_000,
   authorPromptMs: 90_000,
   pickCycles: 1,
+  turnTimerSeconds: 0,
+  turnTimerCustomSeconds: 45,
+  teamsEnabled: false,
+  preventSelfVoteDefault: true,
+  mostLikelyCategory: 'spicy',
 };
 
 export const MAX_CARD_TEXT_LENGTH = 200;
 export const MAX_PLAYERS_PER_ROOM = 20;
 export const MAX_PLAYER_NAME_LENGTH = 24;
 export const ROOM_CODE_LENGTH = 6;
+export const MAX_TEAM_NAME_LENGTH = 32;

@@ -1,4 +1,4 @@
-export type GameMode = 'sharedDeck' | 'pickAndWrite';
+export type GameMode = 'sharedDeck' | 'pickAndWrite' | 'neverHaveIEver' | 'mostLikelyTo';
 
 export type Phase =
   | 'lobby'
@@ -10,7 +10,7 @@ export type Phase =
   | 'revealTurn'
   | 'finished';
 
-export type CardKind = 'truth' | 'dare';
+export type CardKind = 'truth' | 'dare' | 'nhie' | 'mlt';
 
 export interface PublicDeckCard {
   kind: CardKind;
@@ -27,12 +27,49 @@ export interface Player {
   name: string;
 }
 
+export type ReactionCategory = 'funny' | 'savage' | 'chaotic';
+
+export type MostLikelyCategory = 'spicy' | 'dumb' | 'college' | 'embarrassing';
+
+export interface TeamInfo {
+  id: string;
+  name: string;
+}
+
+export interface VoteSessionState {
+  id: string;
+  question: string;
+  candidateIds: string[];
+  mode: 'players' | 'teams';
+  allowSelfVote: boolean;
+  revealed: boolean;
+  voteCount: number;
+  tallies?: Record<string, number>;
+  votes?: Record<string, string>;
+  youVoted: boolean;
+}
+
+export interface PartyMomentPayload {
+  id: string;
+  category: ReactionCategory;
+  title: string;
+  imageUrl: string;
+  sound: 'tick' | 'drum' | 'airhorn';
+  shake?: boolean;
+  confetti?: boolean;
+}
+
 export interface RoomSettings {
   truthsPerPlayer: number;
   daresPerPlayer: number;
   truthAnswerDisplayMs: number;
   authorPromptMs: number;
   pickCycles: number;
+  turnTimerSeconds: number;
+  turnTimerCustomSeconds: number;
+  teamsEnabled: boolean;
+  preventSelfVoteDefault: boolean;
+  mostLikelyCategory: MostLikelyCategory;
 }
 
 export interface RoomState {
@@ -54,9 +91,18 @@ export interface RoomState {
   spotCard: SpotCard | null;
   pickAuthorRound: number;
   settings: RoomSettings;
+  roomLocked: boolean;
+  turnEndsAt: number | null;
+  teams: TeamInfo[];
+  playerTeamId: Record<string, string>;
+  teamScores: Record<string, number>;
+  teamRevealActive: boolean;
+  voteSession: VoteSessionState | null;
+  deckRecentIndices: number[];
 }
 
 export const MAX_CARD_TEXT_LENGTH = 200;
 export const MAX_PLAYERS_PER_ROOM = 20;
 export const MAX_PLAYER_NAME_LENGTH = 24;
 export const ROOM_CODE_LENGTH = 6;
+export const MAX_TEAM_NAME_LENGTH = 32;

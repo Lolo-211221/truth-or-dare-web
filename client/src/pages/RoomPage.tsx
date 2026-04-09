@@ -1,8 +1,19 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useParams } from 'react-router-dom';
-import type { GameMode, RoomSettings, RoomState } from '@shared';
-import { DEFAULT_ROOM_SETTINGS, MAX_CARD_TEXT_LENGTH, MAX_PLAYER_NAME_LENGTH } from '@shared';
+import QRCode from 'react-qr-code';
+import type { CardKind, GameMode, PartyMomentPayload, RoomSettings, RoomState } from '@shared';
+import {
+  DEFAULT_ROOM_SETTINGS,
+  MAX_CARD_TEXT_LENGTH,
+  MAX_PLAYER_NAME_LENGTH,
+  MAX_TEAM_NAME_LENGTH,
+} from '@shared';
+import { PartyMomentOverlay } from '../party/PartyMomentOverlay';
+import { TurnTimerVisual } from '../party/TurnTimerVisual';
+import { VoteOverlay } from '../party/VoteOverlay';
 import { socket } from '../socket';
+import { loadNhieFavorites, toggleNhieFavorite } from '../favorites/nhieFavorites';
+import { useCardSwipe } from '../party/useCardSwipe';
 import { useLobbyMusic } from '../useLobbyMusic';
 
 function ensureConnected() {
@@ -13,6 +24,58 @@ function hostTokenKey(code: string) {
   return `tod_host_${code}`;
 }
 
+function normalizeRoomState(s: RoomState): RoomState {
+  const settings: RoomSettings = {
+    ...DEFAULT_ROOM_SETTINGS,
+    ...s.settings,
+  };
+  return {
+    ...s,
+    settings,
+    roomLocked: s.roomLocked ?? false,
+    turnEndsAt: s.turnEndsAt ?? null,
+    teams: s.teams ?? [],
+    playerTeamId: s.playerTeamId ?? {},
+    teamScores: s.teamScores ?? {},
+    teamRevealActive: s.teamRevealActive ?? false,
+    voteSession: s.voteSession ?? null,
+    deckRecentIndices: s.deckRecentIndices ?? [],
+  };
+}
+
+function effectiveTurnSeconds(settings: RoomSettings): number {
+  const t = settings.turnTimerSeconds;
+  if (t === 0) return 0;
+  if (t === -1) return settings.turnTimerCustomSeconds;
+  return t;
+}
+
+function isTextAnswerKind(k: CardKind): boolean {
+  return k === 'truth' || k === 'nhie' || k === 'mlt';
+}
+
+function cardKindLabel(k: CardKind): string {
+  switch (k) {
+    case 'nhie':
+      return 'Never have I ever';
+    case 'mlt':
+      return 'Most likely to';
+    case 'truth':
+      return 'Truth';
+    case 'dare':
+      return 'Dare';
+    default:
+      return k;
+  }
+}
+
+function tagClassForKind(k: CardKind): string {
+  if (k === 'dare') return 'tag tag-dare';
+  if (k === 'nhie') return 'tag tag-nhie';
+  if (k === 'mlt') return 'tag tag-mlt';
+  return 'tag tag-truth';
+}
+
 export default function RoomPage() {
   const { roomCode: codeParam } = useParams();
   const location = useLocation();
@@ -20,7 +83,7 @@ export default function RoomPage() {
 
   const initial = location.state?.initialState as RoomState | undefined;
   const [state, setState] = useState<RoomState | null>(() =>
-    initial?.roomCode === roomCode ? initial : null,
+    initial?.roomCode === roomCode && initial ? normalizeRoomState(initial) : null,
   );
   const [toast, setToast] = useState('');
   const [actionError, setActionError] = useState('');
@@ -49,6 +112,11 @@ export default function RoomPage() {
   const [musicOn, setMusicOn] = useState(
     () => typeof localStorage !== 'undefined' && localStorage.getItem('tod_music_on') === '1',
   );
+  const [partyMoment, setPartyMoment] = useState<PartyMomentPayload | null>(null);
+  const [voteDraft, setVoteDraft] = useState('');
+  const teamNameInputA = useRef<HTMLInputElement>(null);
+  const teamNameInputB = useRef<HTMLInputElement>(null);
+  const [, favBump] = useState(0);
 
   useLobbyMusic(musicOn);
 
@@ -65,15 +133,21 @@ export default function RoomPage() {
   }, []);
 
   useEffect(() => {
-    if (state?.truthAdvanceAt == null && state?.authorDeadlineAt == null) return;
+    if (
+      state?.truthAdvanceAt == null &&
+      state?.authorDeadlineAt == null &&
+      state?.turnEndsAt == null
+    )
+      return;
     const id = setInterval(() => setNowTick(Date.now()), 500);
     return () => clearInterval(id);
-  }, [state?.truthAdvanceAt, state?.authorDeadlineAt]);
+  }, [state?.truthAdvanceAt, state?.authorDeadlineAt, state?.turnEndsAt]);
 
   useEffect(() => {
     const onState = (s: RoomState) => {
-      if (s.roomCode === roomCode) setState(s);
+      if (s.roomCode === roomCode) setState(normalizeRoomState(s));
     };
+    const onPartyMoment = (p: PartyMomentPayload) => setPartyMoment(p);
     const onHostToken = (p: { hostToken: string }) => {
       sessionStorage.setItem(hostTokenKey(roomCode), p.hostToken);
     };
@@ -85,11 +159,13 @@ export default function RoomPage() {
     socket.on('room_state', onState);
     socket.on('host_token', onHostToken);
     socket.on('error_toast', onToast);
+    socket.on('party_moment', onPartyMoment);
 
     return () => {
       socket.off('room_state', onState);
       socket.off('host_token', onHostToken);
       socket.off('error_toast', onToast);
+      socket.off('party_moment', onPartyMoment);
     };
   }, [roomCode]);
 
@@ -107,7 +183,7 @@ export default function RoomPage() {
     queueMicrotask(() => setJoinAttempted(true));
     socket.emit('join_room', { roomCode, playerName: saved }, (res: { ok: boolean; error?: string; roomState?: RoomState }) => {
       if (res?.ok && res.roomState) {
-        setState(res.roomState);
+        setState(normalizeRoomState(res.roomState));
         setAutoJoinError('');
       } else {
         setAutoJoinError(res?.error ?? 'Could not join automatically.');
@@ -120,11 +196,19 @@ export default function RoomPage() {
     if (state.phase !== 'writingCards' && state.phase !== 'lobby') return;
     const tp = state.settings.truthsPerPlayer;
     const dp = state.settings.daresPerPlayer;
+    const gm = state.gameMode;
+    const nhieMlt = gm === 'neverHaveIEver' || gm === 'mostLikelyTo';
     queueMicrotask(() => {
       setTruths((prev) => Array.from({ length: tp }, (_, i) => prev[i] ?? ''));
-      setDares((prev) => Array.from({ length: dp }, (_, i) => prev[i] ?? ''));
+      setDares((prev) => (nhieMlt ? [] : Array.from({ length: dp }, (_, i) => prev[i] ?? '')));
     });
-  }, [state, state?.settings?.truthsPerPlayer, state?.settings?.daresPerPlayer, state?.phase]);
+  }, [
+    state,
+    state?.settings?.truthsPerPlayer,
+    state?.settings?.daresPerPlayer,
+    state?.phase,
+    state?.gameMode,
+  ]);
 
   const isHost = useMemo(() => {
     if (!state || !myId) return false;
@@ -157,7 +241,7 @@ export default function RoomPage() {
         return;
       }
       sessionStorage.setItem('tod_last_room', roomCode);
-      setState(res.roomState!);
+      setState(normalizeRoomState(res.roomState!));
     });
   };
 
@@ -210,9 +294,15 @@ export default function RoomPage() {
 
   const submitCards = () => {
     setActionError('');
-    socket.emit('submit_cards', { truths, dares }, (res: { ok: boolean; error?: string }) => {
-      if (!res?.ok) setActionError(res?.error ?? 'Invalid cards.');
-    });
+    const gm = state?.gameMode ?? 'sharedDeck';
+    const nhieMlt = gm === 'neverHaveIEver' || gm === 'mostLikelyTo';
+    socket.emit(
+      'submit_cards',
+      { truths, dares: nhieMlt ? [] : dares },
+      (res: { ok: boolean; error?: string }) => {
+        if (!res?.ok) setActionError(res?.error ?? 'Invalid cards.');
+      },
+    );
   };
 
   const lockDeck = () => {
@@ -236,6 +326,134 @@ export default function RoomPage() {
       if (!res?.ok) setActionError(res?.error ?? 'Could not mark done.');
     });
   };
+
+  const toggleRoomLock = (locked: boolean) => {
+    setActionError('');
+    socket.emit(
+      'toggle_room_lock',
+      { hostToken, locked },
+      (res: { ok: boolean; error?: string }) => {
+        if (!res?.ok) setActionError(res?.error ?? 'Could not change lock.');
+      },
+    );
+  };
+
+  const kickPlayer = (targetId: string) => {
+    setActionError('');
+    socket.emit(
+      'kick_player',
+      { hostToken, targetId },
+      (res: { ok: boolean; error?: string }) => {
+        if (!res?.ok) setActionError(res?.error ?? 'Could not remove player.');
+      },
+    );
+  };
+
+  const skipRound = () => {
+    setActionError('');
+    socket.emit('skip_round', { hostToken }, (res: { ok: boolean; error?: string }) => {
+      if (!res?.ok) setActionError(res?.error ?? 'Could not skip.');
+    });
+  };
+
+  const restartGame = () => {
+    if (!window.confirm('Restart and return everyone to the lobby?')) return;
+    setActionError('');
+    socket.emit('restart_game', { hostToken }, (res: { ok: boolean; error?: string }) => {
+      if (!res?.ok) setActionError(res?.error ?? 'Could not restart.');
+    });
+  };
+
+  const pushTeamNames = () => {
+    setActionError('');
+    const nameA = teamNameInputA.current?.value?.trim() || 'Team A';
+    const nameB = teamNameInputB.current?.value?.trim() || 'Team B';
+    socket.emit(
+      'set_team_names',
+      { hostToken, nameA, nameB },
+      (res: { ok: boolean; error?: string }) => {
+        if (!res?.ok) setActionError(res?.error ?? 'Could not save team names.');
+      },
+    );
+  };
+
+  const autoBalanceTeams = () => {
+    setActionError('');
+    socket.emit('auto_balance_teams', { hostToken }, (res: { ok: boolean; error?: string }) => {
+      if (!res?.ok) setActionError(res?.error ?? 'Could not balance.');
+    });
+  };
+
+  const assignTeam = (playerId: string, teamId: string) => {
+    setActionError('');
+    socket.emit(
+      'assign_player_team',
+      { hostToken, playerId, teamId },
+      (res: { ok: boolean; error?: string }) => {
+        if (!res?.ok) setActionError(res?.error ?? 'Could not assign.');
+      },
+    );
+  };
+
+  const teamRevealShow = () => {
+    setActionError('');
+    socket.emit('team_reveal_show', { hostToken }, (res: { ok: boolean; error?: string }) => {
+      if (!res?.ok) setActionError(res?.error ?? 'Could not show reveal.');
+    });
+  };
+
+  const teamRevealDismiss = () => {
+    setActionError('');
+    socket.emit('team_reveal_dismiss', { hostToken }, (res: { ok: boolean; error?: string }) => {
+      if (!res?.ok) setActionError(res?.error ?? 'Could not dismiss.');
+    });
+  };
+
+  const startHostVote = (mode: 'players' | 'teams') => {
+    setActionError('');
+    const question = voteDraft.trim();
+    if (!question) {
+      setActionError('Write a vote question.');
+      return;
+    }
+    socket.emit(
+      'start_vote',
+      { hostToken, question, mode },
+      (res: { ok: boolean; error?: string }) => {
+        if (!res?.ok) setActionError(res?.error ?? 'Could not start vote.');
+        else setVoteDraft('');
+      },
+    );
+  };
+
+  const castVote = (voteId: string) => {
+    socket.emit('cast_vote', { voteId }, (res: { ok: boolean; error?: string }) => {
+      if (!res?.ok) setActionError(res?.error ?? 'Vote failed.');
+    });
+  };
+
+  const revealVotes = () => {
+    socket.emit('reveal_votes', { hostToken }, (res: { ok: boolean; error?: string }) => {
+      if (!res?.ok) setActionError(res?.error ?? 'Could not reveal.');
+    });
+  };
+
+  const clearVote = () => {
+    socket.emit('clear_vote', { hostToken }, (res: { ok: boolean; error?: string }) => {
+      if (!res?.ok) setActionError(res?.error ?? 'Could not clear vote.');
+    });
+  };
+
+  const { swipeHandlers } = useCardSwipe(
+    () => {
+      if (isHost) skipRound();
+    },
+    Boolean(
+      isHost &&
+        state &&
+        (state.phase === 'turn' || state.phase === 'revealTurn' || state.phase === 'pickType'),
+    ),
+  );
 
   if (!roomCode) {
     return (
@@ -274,6 +492,10 @@ export default function RoomPage() {
   const settings = state.settings ?? DEFAULT_ROOM_SETTINGS;
   const gameMode = state.gameMode ?? 'sharedDeck';
   const totalPickTurns = state.players.length * settings.pickCycles;
+  const joinUrl = origin ? `${origin}/room/${state.roomCode}` : '';
+  const turnSec = effectiveTurnSeconds(settings);
+  const teamLabelA = state.teams.find((t) => t.id === 't1')?.name ?? 'Team A';
+  const teamLabelB = state.teams.find((t) => t.id === 't2')?.name ?? 'Team B';
 
   const currentPlayCard =
     state.phase === 'turn'
@@ -305,6 +527,62 @@ export default function RoomPage() {
         </div>
       ) : null}
 
+      {partyMoment ? (
+        <PartyMomentOverlay moment={partyMoment} onClose={() => setPartyMoment(null)} />
+      ) : null}
+
+      {state.teamRevealActive ? (
+        <div className="team-reveal-overlay">
+          <div className="team-reveal-card">
+            <h2>Teams locked in</h2>
+            <div className="team-reveal-grid">
+              {state.teams.map((t) => (
+                <div key={t.id} className="team-reveal-box">
+                  <h3>{t.name}</h3>
+                  <ul className="team-reveal-list">
+                    {state.players
+                      .filter((p) => state.playerTeamId[p.id] === t.id)
+                      .map((p) => (
+                        <li key={p.id}>{p.name}</li>
+                      ))}
+                  </ul>
+                </div>
+              ))}
+            </div>
+            {isHost ? (
+              <button type="button" className="btn-primary" onClick={teamRevealDismiss}>
+                Let&apos;s play
+              </button>
+            ) : (
+              <p className="muted">Waiting for host…</p>
+            )}
+          </div>
+        </div>
+      ) : null}
+
+      {state.voteSession ? (
+        <VoteOverlay
+          teams={state.teams}
+          players={state.players}
+          vote={state.voteSession}
+          myId={myId}
+          onVote={castVote}
+        />
+      ) : null}
+
+      {isHost && state.voteSession ? (
+        <div className="host-vote-bar host-vote-bar--split">
+          {!state.voteSession.revealed ? (
+            <button type="button" className="btn-secondary" onClick={revealVotes}>
+              Reveal votes
+            </button>
+          ) : null}
+          <button type="button" className="btn-secondary" onClick={clearVote}>
+            Clear vote
+          </button>
+        </div>
+      ) : null}
+
       <p className="muted" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.75rem' }}>
         Room <strong style={{ color: '#e8ddff' }}>{state.roomCode}</strong>
         {isHost ? <span className="badge-host">Host</span> : null}
@@ -327,19 +605,120 @@ export default function RoomPage() {
           <h1>Lobby</h1>
           <p className="muted">Share this URL or the code so friends can join.</p>
           <div className="card-panel">
-            <p className="muted" style={{ wordBreak: 'break-all' }}>
-              {origin ? `${origin}/room/${state.roomCode}` : `…/room/${state.roomCode}`}
+            <div className="qr-row">
+              {joinUrl ? (
+                <div className="qr-box" aria-hidden>
+                  <QRCode value={joinUrl} size={112} fgColor="#1a1228" bgColor="#e8ddff" />
+                </div>
+              ) : null}
+              <div className="qr-copy">
+                <p className="muted" style={{ wordBreak: 'break-all', margin: '0 0 0.5rem' }}>
+                  {joinUrl || `…/room/${state.roomCode}`}
+                </p>
+                {joinUrl ? (
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    style={{ marginTop: 0 }}
+                    onClick={() => void navigator.clipboard.writeText(joinUrl)}
+                  >
+                    Copy link
+                  </button>
+                ) : null}
+              </div>
+            </div>
+            <p className="muted lock-line">
+              {state.roomLocked ? 'Room locked — no new joins.' : 'Room open — friends can join.'}
+              {isHost ? (
+                <button
+                  type="button"
+                  className="btn-secondary lock-toggle"
+                  onClick={() => toggleRoomLock(!state.roomLocked)}
+                >
+                  {state.roomLocked ? 'Unlock' : 'Lock room'}
+                </button>
+              ) : null}
             </p>
             <h2>Players ({state.players.length})</h2>
             <ul className="player-list">
               {state.players.map((p) => (
-                <li key={p.id}>
-                  {p.name}
-                  {p.id === state.hostId ? <span className="badge-host">host</span> : null}
-                  {p.id === myId ? <span className="badge-you">you</span> : null}
+                <li key={p.id} className="player-row">
+                  <span>
+                    {p.name}
+                    {p.id === state.hostId ? <span className="badge-host">host</span> : null}
+                    {p.id === myId ? <span className="badge-you">you</span> : null}
+                  </span>
+                  {isHost && p.id !== myId ? (
+                    <button type="button" className="btn-kick" onClick={() => kickPlayer(p.id)}>
+                      Remove
+                    </button>
+                  ) : null}
                 </li>
               ))}
             </ul>
+
+            {isHost ? (
+              <div className="card-panel" style={{ marginTop: '1rem', padding: '1rem' }}>
+                <h2 style={{ marginTop: 0 }}>Teams (optional)</h2>
+                <p className="muted" style={{ marginTop: 0 }}>
+                  Turn on for team points and team votes. Show a reveal screen before starting.
+                </p>
+                <label className="toggle-line">
+                  <input
+                    type="checkbox"
+                    checked={settings.teamsEnabled}
+                    onChange={(e) => updateRoomSettings({ teamsEnabled: e.target.checked })}
+                  />{' '}
+                  Team mode
+                </label>
+                {settings.teamsEnabled ? (
+                  <>
+                    <div className="team-name-row">
+                      <label htmlFor="tn-a">Team 1</label>
+                      <input
+                        ref={teamNameInputA}
+                        id="tn-a"
+                        key={`ta-${teamLabelA}`}
+                        maxLength={MAX_TEAM_NAME_LENGTH}
+                        defaultValue={teamLabelA}
+                      />
+                      <label htmlFor="tn-b">Team 2</label>
+                      <input
+                        ref={teamNameInputB}
+                        id="tn-b"
+                        key={`tb-${teamLabelB}`}
+                        maxLength={MAX_TEAM_NAME_LENGTH}
+                        defaultValue={teamLabelB}
+                      />
+                    </div>
+                    <button type="button" className="btn-secondary" onClick={pushTeamNames}>
+                      Save team names
+                    </button>
+                    <button type="button" className="btn-secondary" onClick={autoBalanceTeams}>
+                      Auto-balance
+                    </button>
+                    <ul className="team-assign">
+                      {state.players.map((p) => (
+                        <li key={p.id}>
+                          {p.name}
+                          <select
+                            value={state.playerTeamId[p.id] ?? 't1'}
+                            onChange={(e) => assignTeam(p.id, e.target.value)}
+                            aria-label={`Team for ${p.name}`}
+                          >
+                            <option value="t1">{teamLabelA}</option>
+                            <option value="t2">{teamLabelB}</option>
+                          </select>
+                        </li>
+                      ))}
+                    </ul>
+                    <button type="button" className="btn-secondary" onClick={teamRevealShow}>
+                      Team reveal screen
+                    </button>
+                  </>
+                ) : null}
+              </div>
+            ) : null}
 
             {isHost ? (
               <div className="card-panel" style={{ marginTop: '1rem', padding: '1rem' }}>
@@ -408,9 +787,68 @@ export default function RoomPage() {
                     updateRoomSettings({ pickCycles: Number(e.target.value) || 1 })
                   }
                 />
+                <p className="muted" style={{ fontSize: '0.85rem', marginTop: '0.75rem' }}>
+                  Turn timer (pick Truth/Dare, play turns — optional)
+                </p>
+                <div className="timer-presets">
+                  {(
+                    [
+                      ['Off', 0],
+                      ['15s', 15],
+                      ['30s', 30],
+                      ['60s', 60],
+                      ['Custom', -1],
+                    ] as const
+                  ).map(([label, val]) => (
+                    <button
+                      key={label}
+                      type="button"
+                      className={
+                        settings.turnTimerSeconds === val ? 'btn-primary timer-preset' : 'btn-secondary timer-preset'
+                      }
+                      onClick={() => updateRoomSettings({ turnTimerSeconds: val })}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                {settings.turnTimerSeconds === -1 ? (
+                  <>
+                    <label htmlFor="st-custom-t">Custom seconds</label>
+                    <input
+                      id="st-custom-t"
+                      type="number"
+                      min={5}
+                      max={300}
+                      value={settings.turnTimerCustomSeconds}
+                      onChange={(e) =>
+                        updateRoomSettings({
+                          turnTimerCustomSeconds: Math.min(300, Math.max(5, Number(e.target.value) || 45)),
+                        })
+                      }
+                    />
+                  </>
+                ) : null}
                 <p className="muted" style={{ fontSize: '0.8rem', marginBottom: 0 }}>
                   One round = everyone gets one turn. Increase for more prompts.
                 </p>
+                <label htmlFor="mlt-cat" style={{ marginTop: '0.75rem' }}>
+                  Most likely to — category (built-in prompts)
+                </label>
+                <select
+                  id="mlt-cat"
+                  value={settings.mostLikelyCategory}
+                  onChange={(e) =>
+                    updateRoomSettings({
+                      mostLikelyCategory: e.target.value as RoomSettings['mostLikelyCategory'],
+                    })
+                  }
+                >
+                  <option value="spicy">Spicy / flirty</option>
+                  <option value="dumb">Dumb / chaotic</option>
+                  <option value="college">College</option>
+                  <option value="embarrassing">Embarrassing</option>
+                </select>
               </div>
             ) : null}
 
@@ -418,43 +856,86 @@ export default function RoomPage() {
               <div className="card-panel" style={{ marginTop: '1rem', padding: '1rem' }}>
                 <h2 style={{ marginTop: 0 }}>Game mode</h2>
                 <p className="muted" style={{ marginTop: 0 }}>
-                  Classic: everyone writes truths & dares, then you shuffle. Pick &amp; write: each turn one
-                  person chooses Truth or Dare, then <strong>one random player</strong> writes the prompt for
-                  them.
+                  Classic Truth or Dare, Never Have I Ever, or Most Likely To (plus built-in prompts). Pick
+                  &amp; write: each turn one person chooses T/D, then a random player writes the prompt.
                 </p>
-                <button
-                  type="button"
-                  className={gameMode === 'sharedDeck' ? 'btn-primary' : 'btn-secondary'}
-                  onClick={() => setGameMode('sharedDeck')}
-                >
-                  Shared deck (classic)
-                </button>
-                <button
-                  type="button"
-                  className={gameMode === 'pickAndWrite' ? 'btn-primary' : 'btn-secondary'}
-                  onClick={() => setGameMode('pickAndWrite')}
-                >
-                  Pick &amp; write
-                </button>
+                <div className="mode-grid">
+                  <button
+                    type="button"
+                    className={gameMode === 'sharedDeck' ? 'btn-primary' : 'btn-secondary'}
+                    onClick={() => setGameMode('sharedDeck')}
+                  >
+                    Truth or Dare deck
+                  </button>
+                  <button
+                    type="button"
+                    className={gameMode === 'neverHaveIEver' ? 'btn-primary' : 'btn-secondary'}
+                    onClick={() => setGameMode('neverHaveIEver')}
+                  >
+                    Never have I ever
+                  </button>
+                  <button
+                    type="button"
+                    className={gameMode === 'mostLikelyTo' ? 'btn-primary' : 'btn-secondary'}
+                    onClick={() => setGameMode('mostLikelyTo')}
+                  >
+                    Most likely to
+                  </button>
+                  <button
+                    type="button"
+                    className={gameMode === 'pickAndWrite' ? 'btn-primary' : 'btn-secondary'}
+                    onClick={() => setGameMode('pickAndWrite')}
+                  >
+                    Pick &amp; write
+                  </button>
+                </div>
               </div>
             ) : (
               <p className="muted" style={{ marginTop: '0.75rem' }}>
                 Mode:{' '}
-                <strong>{gameMode === 'pickAndWrite' ? 'Pick & write' : 'Shared deck'}</strong>
+                <strong>
+                  {gameMode === 'pickAndWrite'
+                    ? 'Pick & write'
+                    : gameMode === 'neverHaveIEver'
+                      ? 'Never have I ever'
+                      : gameMode === 'mostLikelyTo'
+                        ? 'Most likely to'
+                        : 'Truth or Dare deck'}
+                </strong>
               </p>
             )}
 
             {isHost ? (
-              gameMode === 'sharedDeck' ? (
+              <div className="card-panel" style={{ marginTop: '1rem', padding: '1rem' }}>
+                <h2 style={{ marginTop: 0 }}>Party vote</h2>
+                <p className="muted" style={{ marginTop: 0 }}>
+                  Quick poll — secret ballots, host reveals when ready.
+                </p>
+                <label htmlFor="vote-q">Question</label>
+                <textarea
+                  id="vote-q"
+                  value={voteDraft}
+                  onChange={(e) => setVoteDraft(e.target.value)}
+                  placeholder="Who had the worst dare?"
+                  maxLength={200}
+                  rows={2}
+                />
+                <button type="button" className="btn-secondary" onClick={() => startHostVote('players')}>
+                  Start player vote
+                </button>
                 <button
                   type="button"
-                  className="btn-primary"
-                  onClick={startWriting}
-                  disabled={state.players.length < 2}
+                  className="btn-secondary"
+                  disabled={!settings.teamsEnabled}
+                  onClick={() => startHostVote('teams')}
                 >
-                  Start writing cards
+                  Start team vote
                 </button>
-              ) : (
+              </div>
+            ) : null}
+
+            {isHost ? (
+              gameMode === 'pickAndWrite' ? (
                 <button
                   type="button"
                   className="btn-primary"
@@ -462,6 +943,19 @@ export default function RoomPage() {
                   disabled={state.players.length < 2}
                 >
                   Start pick &amp; write game
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="btn-primary"
+                  onClick={startWriting}
+                  disabled={state.players.length < 2}
+                >
+                  {gameMode === 'neverHaveIEver'
+                    ? 'Start writing prompts'
+                    : gameMode === 'mostLikelyTo'
+                      ? 'Start writing prompts'
+                      : 'Start writing cards'}
                 </button>
               )
             ) : (
@@ -478,17 +972,65 @@ export default function RoomPage() {
 
       {state.phase === 'writingCards' && (
         <section>
-          <h1>Write your cards</h1>
+          <h1>
+            {gameMode === 'neverHaveIEver'
+              ? 'Write your Never have I ever… lines'
+              : gameMode === 'mostLikelyTo'
+                ? 'Write your Most likely to… prompts'
+                : 'Write your cards'}
+          </h1>
           <p className="muted">
-            {settings.truthsPerPlayer} truths and {settings.daresPerPlayer} dares each (max{' '}
-            {MAX_CARD_TEXT_LENGTH} chars).
+            {gameMode === 'neverHaveIEver' || gameMode === 'mostLikelyTo' ? (
+              <>
+                {settings.truthsPerPlayer} prompts each (max {MAX_CARD_TEXT_LENGTH} chars).{' '}
+                {gameMode === 'mostLikelyTo'
+                  ? 'The deck mixes your lines with category prompts from the host.'
+                  : 'Favorites are saved on this device only.'}
+              </>
+            ) : (
+              <>
+                {settings.truthsPerPlayer} truths and {settings.daresPerPlayer} dares each (max{' '}
+                {MAX_CARD_TEXT_LENGTH} chars).
+              </>
+            )}
           </p>
 
           <div className="card-panel">
-            <h2>Your truths</h2>
+            <h2>{gameMode === 'neverHaveIEver' ? 'Your statements' : gameMode === 'mostLikelyTo' ? 'Your prompts' : 'Your truths'}</h2>
+            {gameMode === 'neverHaveIEver' && !state.submittedPlayerIds.includes(myId ?? '') ? (
+              <div className="fav-block">
+                <p className="muted" style={{ marginTop: 0 }}>
+                  Favorites (this device)
+                </p>
+                <div className="fav-chips">
+                  {loadNhieFavorites().map((f) => (
+                    <button
+                      key={f}
+                      type="button"
+                      className="fav-chip"
+                      onClick={() => {
+                        const empty = truths.findIndex((x) => !x.trim());
+                        const idx = empty >= 0 ? empty : 0;
+                        const next = [...truths];
+                        next[idx] = f;
+                        setTruths(next);
+                      }}
+                    >
+                      {f.length > 42 ? `${f.slice(0, 40)}…` : f}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
             {truths.map((t, i) => (
               <div key={`t-${i}`} style={{ marginBottom: '0.75rem' }}>
-                <label htmlFor={`t-${i}`}>Truth {i + 1}</label>
+                <label htmlFor={`t-${i}`}>
+                  {gameMode === 'neverHaveIEver'
+                    ? `Line ${i + 1}`
+                    : gameMode === 'mostLikelyTo'
+                      ? `Prompt ${i + 1}`
+                      : `Truth ${i + 1}`}
+                </label>
                 <textarea
                   id={`t-${i}`}
                   value={t}
@@ -500,25 +1042,43 @@ export default function RoomPage() {
                     setTruths(next);
                   }}
                 />
+                {gameMode === 'neverHaveIEver' && t.trim() ? (
+                  <button
+                    type="button"
+                    className="btn-secondary fav-star"
+                    onClick={() => {
+                      toggleNhieFavorite(t);
+                      favBump((n) => n + 1);
+                    }}
+                  >
+                    {loadNhieFavorites().some((x) => x.trim().toLowerCase() === t.trim().toLowerCase())
+                      ? '★ Saved'
+                      : '☆ Save to favorites'}
+                  </button>
+                ) : null}
               </div>
             ))}
-            <h2>Your dares</h2>
-            {dares.map((t, i) => (
-              <div key={`d-${i}`} style={{ marginBottom: '0.75rem' }}>
-                <label htmlFor={`d-${i}`}>Dare {i + 1}</label>
-                <textarea
-                  id={`d-${i}`}
-                  value={t}
-                  maxLength={MAX_CARD_TEXT_LENGTH}
-                  disabled={state.submittedPlayerIds.includes(myId ?? '')}
-                  onChange={(e) => {
-                    const next = [...dares];
-                    next[i] = e.target.value;
-                    setDares(next);
-                  }}
-                />
-              </div>
-            ))}
+            {gameMode !== 'neverHaveIEver' && gameMode !== 'mostLikelyTo' ? (
+              <>
+                <h2>Your dares</h2>
+                {dares.map((t, i) => (
+                  <div key={`d-${i}`} style={{ marginBottom: '0.75rem' }}>
+                    <label htmlFor={`d-${i}`}>Dare {i + 1}</label>
+                    <textarea
+                      id={`d-${i}`}
+                      value={t}
+                      maxLength={MAX_CARD_TEXT_LENGTH}
+                      disabled={state.submittedPlayerIds.includes(myId ?? '')}
+                      onChange={(e) => {
+                        const next = [...dares];
+                        next[i] = e.target.value;
+                        setDares(next);
+                      }}
+                    />
+                  </div>
+                ))}
+              </>
+            ) : null}
 
             {!state.submittedPlayerIds.includes(myId ?? '') ? (
               <button type="button" className="btn-primary" onClick={submitCards}>
@@ -557,10 +1117,35 @@ export default function RoomPage() {
           <p className="muted">
             Turn {state.pickAuthorRound + 1} of {totalPickTurns}
           </p>
-          <div className="card-panel">
+          {settings.teamsEnabled ? (
+            <div className="team-scores-strip">
+              {state.teams.map((t) => (
+                <span key={t.id} className="team-score-pill">
+                  {t.name}: {state.teamScores[t.id] ?? 0}
+                </span>
+              ))}
+            </div>
+          ) : null}
+          <TurnTimerVisual
+            turnEndsAt={state.turnEndsAt}
+            totalSeconds={turnSec}
+            nowTick={nowTick}
+          />
+          {isHost ? (
+            <div className="host-play-bar">
+              <button type="button" className="btn-secondary" onClick={skipRound}>
+                Skip round
+              </button>
+              <button type="button" className="btn-secondary" onClick={restartGame}>
+                Restart to lobby
+              </button>
+            </div>
+          ) : null}
+          <div className="card-panel card-play-surface" {...swipeHandlers}>
             <p className="prompt-text" style={{ fontSize: '1.05rem' }}>
               <strong>{subjectName}</strong>, choose:
             </p>
+            {isHost ? <p className="muted swipe-hint">Swipe left on card to skip (host)</p> : null}
             {iAmSubject ? (
               <>
                 <button type="button" className="btn-primary" onClick={() => pickTruthOrDare('truth')}>
@@ -626,31 +1211,76 @@ export default function RoomPage() {
           <h1>
             {state.phase === 'revealTurn'
               ? `Pick & write — turn ${state.pickAuthorRound + 1} of ${totalPickTurns}`
-              : `Round ${state.currentCardIndex + 1}`}
+              : gameMode === 'neverHaveIEver'
+                ? `Never have I ever — ${state.currentCardIndex + 1} of ${state.deck.length}`
+                : gameMode === 'mostLikelyTo'
+                  ? `Most likely to — ${state.currentCardIndex + 1} of ${state.deck.length}`
+                  : `Round ${state.currentCardIndex + 1}`}
           </h1>
           <p className="muted">
             {state.phase === 'revealTurn'
               ? `${subjectName} is up`
               : `Card ${state.currentCardIndex + 1} of ${state.deck.length}`}
           </p>
+          {settings.teamsEnabled ? (
+            <div className="team-scores-strip">
+              {state.teams.map((t) => (
+                <span key={t.id} className="team-score-pill">
+                  {t.name}: {state.teamScores[t.id] ?? 0}
+                </span>
+              ))}
+            </div>
+          ) : null}
+          <TurnTimerVisual
+            turnEndsAt={state.turnEndsAt}
+            totalSeconds={turnSec}
+            nowTick={nowTick}
+          />
+          {isHost ? (
+            <div className="host-play-bar">
+              <button type="button" className="btn-secondary" onClick={skipRound}>
+                Skip round
+              </button>
+              <button type="button" className="btn-secondary" onClick={restartGame}>
+                Restart to lobby
+              </button>
+            </div>
+          ) : null}
 
-          <div className="card-panel">
-            <span className={currentPlayCard.kind === 'truth' ? 'tag tag-truth' : 'tag tag-dare'}>
-              {currentPlayCard.kind}
-            </span>
-            <p className="prompt-text">{currentPlayCard.text}</p>
+          <div className="card-panel card-play-surface" {...swipeHandlers}>
+            <span className={tagClassForKind(currentPlayCard.kind)}>{cardKindLabel(currentPlayCard.kind)}</span>
+            <p className="prompt-text">
+              {currentPlayCard.kind === 'nhie' ? (
+                <>
+                  Never have I ever… <em>{currentPlayCard.text}</em>
+                </>
+              ) : currentPlayCard.kind === 'mlt' ? (
+                <>
+                  Who is most likely to… <em>{currentPlayCard.text}</em>
+                </>
+              ) : (
+                currentPlayCard.text
+              )}
+            </p>
 
             <p className="muted">
               Active: <strong style={{ color: '#fde047' }}>{activeName}</strong>
               {iAmActive ? <span className="badge-active">your turn</span> : null}
+              {isHost ? (
+                <span className="muted swipe-hint"> · Swipe left to skip (host)</span>
+              ) : null}
             </p>
 
-            {currentPlayCard.kind === 'truth' && (
+            {isTextAnswerKind(currentPlayCard.kind) && (
               <>
                 {state.truthAnswer ? (
                   <div style={{ marginTop: '1rem', padding: '0.75rem', background: 'rgba(59,130,246,0.12)', borderRadius: '0.5rem' }}>
                     <p className="muted" style={{ margin: 0 }}>
-                      Answer
+                      {currentPlayCard.kind === 'nhie'
+                        ? 'Response'
+                        : currentPlayCard.kind === 'mlt'
+                          ? 'Call'
+                          : 'Answer'}
                     </p>
                     <p style={{ margin: '0.35rem 0 0' }}>{state.truthAnswer}</p>
                     {truthSecondsLeft != null ? (
@@ -663,7 +1293,13 @@ export default function RoomPage() {
                   </div>
                 ) : iAmActive ? (
                   <>
-                    <label htmlFor="ans">Your answer</label>
+                    <label htmlFor="ans">
+                      {currentPlayCard.kind === 'nhie'
+                        ? 'Have you? Say I have / I haven’t — or explain.'
+                        : currentPlayCard.kind === 'mlt'
+                          ? 'Name someone (or explain).'
+                          : 'Your answer'}
+                    </label>
                     <textarea
                       id="ans"
                       value={truthAnswer}
@@ -702,7 +1338,11 @@ export default function RoomPage() {
             <p>
               {gameMode === 'pickAndWrite'
                 ? 'Everyone had their turn. Nice game!'
-                : 'You made it through the whole deck.'}
+                : gameMode === 'neverHaveIEver'
+                  ? 'That’s every line — legendary.'
+                  : gameMode === 'mostLikelyTo'
+                    ? 'Deck finished — chaos contained.'
+                    : 'You made it through the whole deck.'}
             </p>
             <p className="muted">Start a new room from home to play again.</p>
           </div>
