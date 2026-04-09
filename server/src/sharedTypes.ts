@@ -27,6 +27,14 @@ export interface Player {
   name: string;
 }
 
+export interface RoomSettings {
+  truthsPerPlayer: number;
+  daresPerPlayer: number;
+  truthAnswerDisplayMs: number;
+  authorPromptMs: number;
+  pickCycles: number;
+}
+
 export interface RoomState {
   roomCode: string;
   phase: Phase;
@@ -45,10 +53,9 @@ export interface RoomState {
   authorDeadlineAt: number | null;
   spotCard: SpotCard | null;
   pickAuthorRound: number;
+  settings: RoomSettings;
 }
 
-export const TRUTHS_PER_PLAYER = 2;
-export const DARES_PER_PLAYER = 2;
 export const MAX_CARD_TEXT_LENGTH = 200;
 export const MAX_PLAYERS_PER_ROOM = 20;
 export const MAX_PLAYER_NAME_LENGTH = 24;

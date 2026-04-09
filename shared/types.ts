@@ -29,6 +29,20 @@ export interface Player {
   name: string;
 }
 
+/** Host-adjustable before the game starts (lobby only). */
+export interface RoomSettings {
+  /** sharedDeck: truths each person writes */
+  truthsPerPlayer: number;
+  /** sharedDeck: dares each person writes */
+  daresPerPlayer: number;
+  /** How long a Truth answer stays on screen before the next card (ms) */
+  truthAnswerDisplayMs: number;
+  /** pickAndWrite: time for the random author to write the prompt (ms) */
+  authorPromptMs: number;
+  /** pickAndWrite: how many full passes through all players (each person gets a turn per pass) */
+  pickCycles: number;
+}
+
 export interface RoomState {
   roomCode: string;
   phase: Phase;
@@ -56,12 +70,20 @@ export interface RoomState {
   /** Unix ms deadline for the author to submit */
   authorDeadlineAt: number | null;
   spotCard: SpotCard | null;
-  /** pickAndWrite: 0-based index whose turn it is to pick (same as subject index) */
+  /** pickAndWrite: 0-based turn counter */
   pickAuthorRound: number;
+  settings: RoomSettings;
 }
 
-export const TRUTHS_PER_PLAYER = 2;
-export const DARES_PER_PLAYER = 2;
+/** Defaults when creating a room; server may seed ms from env. */
+export const DEFAULT_ROOM_SETTINGS: RoomSettings = {
+  truthsPerPlayer: 2,
+  daresPerPlayer: 2,
+  truthAnswerDisplayMs: 10_000,
+  authorPromptMs: 90_000,
+  pickCycles: 1,
+};
+
 export const MAX_CARD_TEXT_LENGTH = 200;
 export const MAX_PLAYERS_PER_ROOM = 20;
 export const MAX_PLAYER_NAME_LENGTH = 24;

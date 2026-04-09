@@ -1,13 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useLocation, useParams } from 'react-router-dom';
-import type { GameMode, RoomState } from '@shared';
-import {
-  DARES_PER_PLAYER,
-  MAX_CARD_TEXT_LENGTH,
-  MAX_PLAYER_NAME_LENGTH,
-  TRUTHS_PER_PLAYER,
-} from '@shared';
+import type { GameMode, RoomSettings, RoomState } from '@shared';
+import { DEFAULT_ROOM_SETTINGS, MAX_CARD_TEXT_LENGTH, MAX_PLAYER_NAME_LENGTH } from '@shared';
 import { socket } from '../socket';
+import { useLobbyMusic } from '../useLobbyMusic';
 
 function ensureConnected() {
   if (!socket.connected) socket.connect();
@@ -41,11 +37,20 @@ export default function RoomPage() {
   const [joinName, setJoinName] = useState(() => sessionStorage.getItem('tod_display_name') ?? '');
   const [joinAttempted, setJoinAttempted] = useState(!!(initial?.roomCode === roomCode));
 
-  const [truths, setTruths] = useState<string[]>(() => Array(TRUTHS_PER_PLAYER).fill(''));
-  const [dares, setDares] = useState<string[]>(() => Array(DARES_PER_PLAYER).fill(''));
+  const [truths, setTruths] = useState<string[]>(() =>
+    Array(DEFAULT_ROOM_SETTINGS.truthsPerPlayer).fill(''),
+  );
+  const [dares, setDares] = useState<string[]>(() =>
+    Array(DEFAULT_ROOM_SETTINGS.daresPerPlayer).fill(''),
+  );
   const [truthAnswer, setTruthAnswer] = useState('');
   const [authorDraft, setAuthorDraft] = useState('');
   const [nowTick, setNowTick] = useState(() => Date.now());
+  const [musicOn, setMusicOn] = useState(
+    () => typeof localStorage !== 'undefined' && localStorage.getItem('tod_music_on') === '1',
+  );
+
+  useLobbyMusic(musicOn);
 
   useEffect(() => {
     ensureConnected();
@@ -110,6 +115,17 @@ export default function RoomPage() {
     });
   }, [roomCode, state?.roomCode, joinAttempted]);
 
+  useEffect(() => {
+    if (!state) return;
+    if (state.phase !== 'writingCards' && state.phase !== 'lobby') return;
+    const tp = state.settings.truthsPerPlayer;
+    const dp = state.settings.daresPerPlayer;
+    queueMicrotask(() => {
+      setTruths((prev) => Array.from({ length: tp }, (_, i) => prev[i] ?? ''));
+      setDares((prev) => Array.from({ length: dp }, (_, i) => prev[i] ?? ''));
+    });
+  }, [state, state?.settings?.truthsPerPlayer, state?.settings?.daresPerPlayer, state?.phase]);
+
   const isHost = useMemo(() => {
     if (!state || !myId) return false;
     return state.hostId === myId;
@@ -164,6 +180,17 @@ export default function RoomPage() {
     socket.emit('start_pick_author', { hostToken }, (res: { ok: boolean; error?: string }) => {
       if (!res?.ok) setActionError(res?.error ?? 'Failed.');
     });
+  };
+
+  const updateRoomSettings = (partial: Partial<RoomSettings>) => {
+    setActionError('');
+    socket.emit(
+      'update_room_settings',
+      { hostToken, settings: partial },
+      (res: { ok: boolean; error?: string }) => {
+        if (!res?.ok) setActionError(res?.error ?? 'Could not update settings.');
+      },
+    );
   };
 
   const pickTruthOrDare = (choice: 'truth' | 'dare') => {
@@ -244,7 +271,9 @@ export default function RoomPage() {
     );
   }
 
+  const settings = state.settings ?? DEFAULT_ROOM_SETTINGS;
   const gameMode = state.gameMode ?? 'sharedDeck';
+  const totalPickTurns = state.players.length * settings.pickCycles;
 
   const currentPlayCard =
     state.phase === 'turn'
@@ -276,9 +305,21 @@ export default function RoomPage() {
         </div>
       ) : null}
 
-      <p className="muted">
+      <p className="muted" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.75rem' }}>
         Room <strong style={{ color: '#e8ddff' }}>{state.roomCode}</strong>
-        {isHost ? <span className="badge-host" style={{ marginLeft: '0.5rem' }}>Host</span> : null}
+        {isHost ? <span className="badge-host">Host</span> : null}
+        <button
+          type="button"
+          className="btn-secondary"
+          style={{ width: 'auto', padding: '0.35rem 0.75rem', margin: 0 }}
+          onClick={() => {
+            const next = !musicOn;
+            setMusicOn(next);
+            localStorage.setItem('tod_music_on', next ? '1' : '0');
+          }}
+        >
+          {musicOn ? 'Music on' : 'Music off'}
+        </button>
       </p>
 
       {state.phase === 'lobby' && (
@@ -299,6 +340,79 @@ export default function RoomPage() {
                 </li>
               ))}
             </ul>
+
+            {isHost ? (
+              <div className="card-panel" style={{ marginTop: '1rem', padding: '1rem' }}>
+                <h2 style={{ marginTop: 0 }}>Game settings</h2>
+                <p className="muted" style={{ marginTop: 0 }}>
+                  Applies to this room once you start. Everyone sees the same timers.
+                </p>
+                <label htmlFor="st-truth" style={{ marginTop: '0.5rem' }}>
+                  Truths per person (shared deck)
+                </label>
+                <input
+                  id="st-truth"
+                  type="number"
+                  min={1}
+                  max={10}
+                  value={settings.truthsPerPlayer}
+                  onChange={(e) =>
+                    updateRoomSettings({ truthsPerPlayer: Number(e.target.value) || 1 })
+                  }
+                />
+                <label htmlFor="st-dare">Dares per person (shared deck)</label>
+                <input
+                  id="st-dare"
+                  type="number"
+                  min={1}
+                  max={10}
+                  value={settings.daresPerPlayer}
+                  onChange={(e) =>
+                    updateRoomSettings({ daresPerPlayer: Number(e.target.value) || 1 })
+                  }
+                />
+                <label htmlFor="st-read">Truth answer on screen (seconds)</label>
+                <input
+                  id="st-read"
+                  type="number"
+                  min={3}
+                  max={120}
+                  value={Math.round(settings.truthAnswerDisplayMs / 1000)}
+                  onChange={(e) =>
+                    updateRoomSettings({
+                      truthAnswerDisplayMs: Math.max(3000, (Number(e.target.value) || 10) * 1000),
+                    })
+                  }
+                />
+                <label htmlFor="st-author">Time to write prompt — pick &amp; write (seconds)</label>
+                <input
+                  id="st-author"
+                  type="number"
+                  min={15}
+                  max={300}
+                  value={Math.round(settings.authorPromptMs / 1000)}
+                  onChange={(e) =>
+                    updateRoomSettings({
+                      authorPromptMs: Math.max(15000, (Number(e.target.value) || 90) * 1000),
+                    })
+                  }
+                />
+                <label htmlFor="st-cycles">Full rounds (pick &amp; write)</label>
+                <input
+                  id="st-cycles"
+                  type="number"
+                  min={1}
+                  max={10}
+                  value={settings.pickCycles}
+                  onChange={(e) =>
+                    updateRoomSettings({ pickCycles: Number(e.target.value) || 1 })
+                  }
+                />
+                <p className="muted" style={{ fontSize: '0.8rem', marginBottom: 0 }}>
+                  One round = everyone gets one turn. Increase for more prompts.
+                </p>
+              </div>
+            ) : null}
 
             {isHost ? (
               <div className="card-panel" style={{ marginTop: '1rem', padding: '1rem' }}>
@@ -366,7 +480,8 @@ export default function RoomPage() {
         <section>
           <h1>Write your cards</h1>
           <p className="muted">
-            {TRUTHS_PER_PLAYER} truths and {DARES_PER_PLAYER} dares each (max {MAX_CARD_TEXT_LENGTH} chars).
+            {settings.truthsPerPlayer} truths and {settings.daresPerPlayer} dares each (max{' '}
+            {MAX_CARD_TEXT_LENGTH} chars).
           </p>
 
           <div className="card-panel">
@@ -440,7 +555,7 @@ export default function RoomPage() {
         <section>
           <h1>Pick &amp; write</h1>
           <p className="muted">
-            Turn {state.pickAuthorRound + 1} of {state.players.length}
+            Turn {state.pickAuthorRound + 1} of {totalPickTurns}
           </p>
           <div className="card-panel">
             <p className="prompt-text" style={{ fontSize: '1.05rem' }}>
@@ -510,7 +625,7 @@ export default function RoomPage() {
         <section>
           <h1>
             {state.phase === 'revealTurn'
-              ? `Pick & write — turn ${state.pickAuthorRound + 1} of ${state.players.length}`
+              ? `Pick & write — turn ${state.pickAuthorRound + 1} of ${totalPickTurns}`
               : `Round ${state.currentCardIndex + 1}`}
           </h1>
           <p className="muted">

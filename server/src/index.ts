@@ -8,15 +8,16 @@ import express from 'express';
 import { Server } from 'socket.io';
 import { v4 as uuidv4 } from 'uuid';
 
-import type { CardKind, GameMode, Phase, Player, PublicDeckCard, RoomState } from './sharedTypes.js';
-import {
-  DARES_PER_PLAYER,
-  MAX_CARD_TEXT_LENGTH,
-  MAX_PLAYERS_PER_ROOM,
-  MAX_PLAYER_NAME_LENGTH,
-  ROOM_CODE_LENGTH,
-  TRUTHS_PER_PLAYER,
+import type {
+  CardKind,
+  GameMode,
+  Phase,
+  Player,
+  PublicDeckCard,
+  RoomSettings,
+  RoomState,
 } from './sharedTypes.js';
+import { MAX_CARD_TEXT_LENGTH, MAX_PLAYERS_PER_ROOM, MAX_PLAYER_NAME_LENGTH, ROOM_CODE_LENGTH } from './sharedTypes.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -24,16 +25,38 @@ const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const PORT = Number(process.env.PORT) || 3001;
 const RATE_WINDOW_MS = 60_000;
 const RATE_MAX_JOINS = 30;
-/** How long everyone can read a Truth answer before the next card (ms). Override with TRUTH_ANSWER_DISPLAY_MS. */
-const TRUTH_ANSWER_DISPLAY_MS = Math.min(
-  120_000,
-  Math.max(3000, Number(process.env.TRUTH_ANSWER_DISPLAY_MS) || 10_000),
-);
-/** Time for the random author to write a prompt in pickAndWrite mode */
-const AUTHOR_PROMPT_MS = Math.min(
-  300_000,
-  Math.max(15_000, Number(process.env.AUTHOR_PROMPT_MS) || 90_000),
-);
+function defaultRoomSettings(): RoomSettings {
+  return {
+    truthsPerPlayer: 2,
+    daresPerPlayer: 2,
+    truthAnswerDisplayMs: Math.min(
+      120_000,
+      Math.max(3000, Number(process.env.TRUTH_ANSWER_DISPLAY_MS) || 10_000),
+    ),
+    authorPromptMs: Math.min(
+      300_000,
+      Math.max(15_000, Number(process.env.AUTHOR_PROMPT_MS) || 90_000),
+    ),
+    pickCycles: 1,
+  };
+}
+
+function clampRoomSettings(p: Partial<RoomSettings>): RoomSettings {
+  const d = defaultRoomSettings();
+  return {
+    truthsPerPlayer: Math.min(10, Math.max(1, Math.round(Number(p.truthsPerPlayer ?? d.truthsPerPlayer)))),
+    daresPerPlayer: Math.min(10, Math.max(1, Math.round(Number(p.daresPerPlayer ?? d.daresPerPlayer)))),
+    truthAnswerDisplayMs: Math.min(
+      120_000,
+      Math.max(3000, Math.round(Number(p.truthAnswerDisplayMs ?? d.truthAnswerDisplayMs))),
+    ),
+    authorPromptMs: Math.min(
+      300_000,
+      Math.max(15_000, Math.round(Number(p.authorPromptMs ?? d.authorPromptMs))),
+    ),
+    pickCycles: Math.min(10, Math.max(1, Math.round(Number(p.pickCycles ?? d.pickCycles)))),
+  };
+}
 
 interface InternalCard {
   kind: CardKind;
@@ -68,6 +91,7 @@ interface InternalRoom {
   spotCard: { kind: CardKind; text: string } | null;
   pickAuthorRound: number;
   authorTimer: ReturnType<typeof setTimeout> | null;
+  settings: RoomSettings;
 }
 
 const rooms = new Map<string, InternalRoom>();
@@ -151,6 +175,7 @@ function toRoomState(room: InternalRoom): RoomState {
     authorDeadlineAt: room.authorDeadlineAt,
     spotCard: room.spotCard,
     pickAuthorRound: room.pickAuthorRound,
+    settings: room.settings,
   };
 }
 
@@ -169,8 +194,9 @@ function clearAuthorTimer(room: InternalRoom) {
 
 function scheduleAuthorDeadline(ioSrv: Server, room: InternalRoom) {
   const code = room.code;
+  const ms = room.settings.authorPromptMs;
   clearAuthorTimer(room);
-  room.authorDeadlineAt = Date.now() + AUTHOR_PROMPT_MS;
+  room.authorDeadlineAt = Date.now() + ms;
   room.authorTimer = setTimeout(() => {
     const r = rooms.get(code);
     if (!r || r.phase !== 'authorPrompt' || !r.pickedKind) return;
@@ -186,17 +212,20 @@ function scheduleAuthorDeadline(ioSrv: Server, room: InternalRoom) {
     r.pickedKind = null;
     r.authorPlayerId = null;
     ioSrv.to(code).emit('room_state', toRoomState(r));
-  }, AUTHOR_PROMPT_MS);
+  }, ms);
 }
 
 function validateCardBatch(
+  room: InternalRoom,
   truths: string[],
   dares: string[],
 ): { ok: true } | { ok: false; error: string } {
-  if (truths.length !== TRUTHS_PER_PLAYER || dares.length !== DARES_PER_PLAYER) {
+  const tp = room.settings.truthsPerPlayer;
+  const dp = room.settings.daresPerPlayer;
+  if (truths.length !== tp || dares.length !== dp) {
     return {
       ok: false,
-      error: `Need exactly ${TRUTHS_PER_PLAYER} truths and ${DARES_PER_PLAYER} dares.`,
+      error: `Need exactly ${tp} truths and ${dp} dares.`,
     };
   }
   const all = [...truths, ...dares];
@@ -405,6 +434,7 @@ io.on('connection', (socket) => {
       spotCard: null,
       pickAuthorRound: 0,
       authorTimer: null,
+      settings: defaultRoomSettings(),
     };
     rooms.set(code, room);
     socket.join(code);
@@ -518,6 +548,29 @@ io.on('connection', (socket) => {
     ack?.({ ok: true });
     io.to(code).emit('room_state', toRoomState(room));
   });
+
+  socket.on(
+    'update_room_settings',
+    (payload: { hostToken: string; settings: Partial<RoomSettings> }, ack) => {
+      const code = socketRoom.get(socket.id);
+      if (!code) {
+        ack?.({ ok: false, error: 'Not in a room.' });
+        return;
+      }
+      const room = rooms.get(code);
+      if (!room || room.hostSocketId !== socket.id || payload?.hostToken !== room.hostToken) {
+        ack?.({ ok: false, error: 'Only the host can change settings.' });
+        return;
+      }
+      if (room.phase !== 'lobby') {
+        ack?.({ ok: false, error: 'Settings can only be changed in the lobby.' });
+        return;
+      }
+      room.settings = clampRoomSettings({ ...room.settings, ...payload?.settings });
+      ack?.({ ok: true });
+      io.to(code).emit('room_state', toRoomState(room));
+    },
+  );
 
   socket.on('start_pick_author', (payload: { hostToken: string }, ack) => {
     const code = socketRoom.get(socket.id);
@@ -646,7 +699,7 @@ io.on('connection', (socket) => {
       return;
     }
 
-    const v = validateCardBatch(payload?.truths ?? [], payload?.dares ?? []);
+    const v = validateCardBatch(room, payload?.truths ?? [], payload?.dares ?? []);
     if (!v.ok) {
       ack?.({ ok: false, error: v.error });
       return;
@@ -771,8 +824,9 @@ io.on('connection', (socket) => {
       return;
     }
 
+    const readMs = room.settings.truthAnswerDisplayMs;
     room.truthAnswer = text;
-    room.truthAdvanceAt = Date.now() + TRUTH_ANSWER_DISPLAY_MS;
+    room.truthAdvanceAt = Date.now() + readMs;
     room.pendingAdvance = true;
     io.to(code).emit('room_state', toRoomState(room));
 
@@ -785,7 +839,7 @@ io.on('connection', (socket) => {
       } else {
         advanceCard(io, r);
       }
-    }, TRUTH_ANSWER_DISPLAY_MS);
+    }, readMs);
     ack?.({ ok: true });
   });
 
@@ -848,11 +902,12 @@ function advancePickAuthorTurn(ioSrv: Server, room: InternalRoom) {
   room.pendingAdvance = false;
 
   room.pickAuthorRound += 1;
-  if (room.pickAuthorRound >= room.playerOrder.length) {
+  const totalTurns = room.playerOrder.length * room.settings.pickCycles;
+  if (room.pickAuthorRound >= totalTurns) {
     room.phase = 'finished';
   } else {
     room.phase = 'pickType';
-    room.subjectPlayerId = room.playerOrder[room.pickAuthorRound]!;
+    room.subjectPlayerId = room.playerOrder[room.pickAuthorRound % room.playerOrder.length]!;
   }
 
   ioSrv.to(code).emit('room_state', toRoomState(room));

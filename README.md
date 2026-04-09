@@ -60,6 +60,14 @@ If the site shows **“Application failed to respond”** on Railway, it was oft
 
 **Pick & write author timer:** default **90 seconds** to write the prompt. Override with **`AUTHOR_PROMPT_MS`** (clamped between 15000 and 300000).
 
+### Per-room settings (host, lobby)
+
+The host can change **before starting**: how many truths/dares each person writes (shared deck), how long a **Truth answer stays on screen**, how long the **random author** has to write (pick & write), how many **full rounds** to run in pick & write, and **game mode**. These are stored on the server for that room (not per-player).
+
+### Lobby music
+
+The app plays a loop from [`client/public/audio/lobby.mp3`](client/public/audio/lobby.mp3). Replace that file to change the track. Each player toggles **Music on/off** (browser may require a tap before audio plays). Preference is saved in `localStorage`.
+
 No separate static host is required: one Node process serves both the SPA and real-time traffic.
 
 ### Netlify (frontend only)
