@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useParams } from 'react-router-dom';
-import QRCode from 'react-qr-code';
 import type { CardKind, GameMode, PartyMomentPayload, RoomSettings, RoomState } from '@shared';
+import { QrCode } from '../components/QrCode';
 import {
   DEFAULT_ROOM_SETTINGS,
   MAX_CARD_TEXT_LENGTH,
@@ -618,7 +618,7 @@ export default function RoomPage() {
             <div className="qr-row">
               {joinUrl ? (
                 <div className="qr-box" aria-hidden>
-                  <QRCode value={joinUrl} size={112} fgColor="#1a1228" bgColor="#e8ddff" />
+                  <QrCode value={joinUrl} size={112} fgColor="#1a1228" bgColor="#e8ddff" />
                 </div>
               ) : null}
               <div className="qr-copy">
