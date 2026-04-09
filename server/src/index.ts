@@ -223,13 +223,33 @@ function resolveClientDistDir(): string {
 
 const app = express();
 app.use(cors());
+app.set('trust proxy', 1);
+
+/** Railway / load balancers often probe this; keep it cheap. */
+app.get('/health', (_req, res) => {
+  res.status(200).type('text/plain').send('ok');
+});
+
 const clientDist = resolveClientDistDir();
-if (fs.existsSync(path.join(clientDist, 'index.html'))) {
+const spaIndex = path.join(clientDist, 'index.html');
+const hasSpa = fs.existsSync(spaIndex);
+console.log(`Static UI: ${hasSpa ? clientDist : 'MISSING — run "npm run build" at repo root before start'}`);
+
+if (hasSpa) {
   app.use(express.static(clientDist));
   app.use((req, res, next) => {
     if (req.path.startsWith('/socket.io')) return next();
     if (req.method !== 'GET' && req.method !== 'HEAD') return next();
-    res.sendFile(path.join(clientDist, 'index.html'));
+    res.sendFile(spaIndex, (err) => {
+      if (err) next(err);
+    });
+  });
+} else {
+  app.get('/', (_req, res) => {
+    res
+      .status(503)
+      .type('text/plain')
+      .send('Client not built. Set build command to: npm install && npm run build');
   });
 }
 
@@ -546,6 +566,7 @@ function advanceCard(ioSrv: Server, room: InternalRoom) {
   ioSrv.to(code).emit('room_state', toRoomState(room));
 }
 
-httpServer.listen(PORT, () => {
-  console.log(`Truth or Dare server on port ${PORT}`);
+/** Must bind 0.0.0.0 in Docker / Railway or the proxy cannot reach the process. */
+httpServer.listen(PORT, '0.0.0.0', () => {
+  console.log(`Truth or Dare server listening on 0.0.0.0:${PORT}`);
 });

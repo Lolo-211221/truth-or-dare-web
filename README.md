@@ -42,10 +42,14 @@ This builds the React app into `client/dist`, then runs `node server/dist/index.
 
 ## Deploy (Railway, Fly.io, Render, etc.)
 
-1. **Build command:** `npm run build`
-2. **Start command:** `npm start`
-3. **Environment:** set `PORT` if the host injects one (Railway/Render usually do).
-4. **WebSockets:** enable or use the default HTTP upgrade path; Socket.IO uses `/socket.io` on the same origin as the site.
+1. **Root directory:** repository root (where the root `package.json` lives).
+2. **Install + build:** `npm ci` (or `npm install`) then **`npm run build`** — this must produce **`client/dist`**. The repo includes [`nixpacks.toml`](./nixpacks.toml) so Nixpacks-based hosts run that automatically.
+3. **Start command:** `npm start`
+4. **`PORT`:** leave unset on Railway/Render; the platform injects it. The server listens on **`0.0.0.0`** so the proxy can reach the container.
+5. **Health check (optional):** use path **`/health`** (returns plain `ok`).
+6. **WebSockets:** same origin as the site; Socket.IO path is **`/socket.io`**.
+
+If the site shows **“Application failed to respond”** on Railway, it was often **binding to localhost only** (fixed in server code) or **skipping the client build** so nothing useful is served — check deploy logs for `Static UI: ...`.
 
 No separate static host is required: one Node process serves both the SPA and real-time traffic.
 

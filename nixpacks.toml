@@ -1,0 +1,11 @@
+# Ensures the client is built before `npm start` (monorepo).
+# https://nixpacks.com/docs/configuration/file
+
+[phases.install]
+cmds = ['npm ci']
+
+[phases.build]
+cmds = ['npm run build']
+
+[start]
+cmd = 'npm start'
