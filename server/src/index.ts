@@ -8,7 +8,7 @@ import express from 'express';
 import { Server } from 'socket.io';
 import { v4 as uuidv4 } from 'uuid';
 
-import type { CardKind, Phase, Player, PublicDeckCard, RoomState } from './sharedTypes.js';
+import type { CardKind, GameMode, Phase, Player, PublicDeckCard, RoomState } from './sharedTypes.js';
 import {
   DARES_PER_PLAYER,
   MAX_CARD_TEXT_LENGTH,
@@ -28,6 +28,11 @@ const RATE_MAX_JOINS = 30;
 const TRUTH_ANSWER_DISPLAY_MS = Math.min(
   120_000,
   Math.max(3000, Number(process.env.TRUTH_ANSWER_DISPLAY_MS) || 10_000),
+);
+/** Time for the random author to write a prompt in pickAndWrite mode */
+const AUTHOR_PROMPT_MS = Math.min(
+  300_000,
+  Math.max(15_000, Number(process.env.AUTHOR_PROMPT_MS) || 90_000),
 );
 
 interface InternalCard {
@@ -54,6 +59,15 @@ interface InternalRoom {
   truthAdvanceAt: number | null;
   /** Prevents double advance (truth timeout / dare tap) */
   pendingAdvance: boolean;
+
+  gameMode: GameMode;
+  subjectPlayerId: string | null;
+  authorPlayerId: string | null;
+  pickedKind: CardKind | null;
+  authorDeadlineAt: number | null;
+  spotCard: { kind: CardKind; text: string } | null;
+  pickAuthorRound: number;
+  authorTimer: ReturnType<typeof setTimeout> | null;
 }
 
 const rooms = new Map<string, InternalRoom>();
@@ -99,7 +113,7 @@ function playersList(room: InternalRoom): Player[] {
   }));
 }
 
-function activePlayerId(room: InternalRoom): string | null {
+function activePlayerIdDeck(room: InternalRoom): string | null {
   if (room.phase !== 'turn' || room.deck.length === 0) return null;
   if (room.currentCardIndex < 0 || room.currentCardIndex >= room.deck.length) return null;
   const n = room.playerOrder.length;
@@ -112,6 +126,13 @@ function publicDeck(room: InternalRoom): PublicDeckCard[] {
 }
 
 function toRoomState(room: InternalRoom): RoomState {
+  const active =
+    room.phase === 'turn'
+      ? activePlayerIdDeck(room)
+      : room.phase === 'revealTurn'
+        ? room.subjectPlayerId
+        : null;
+
   return {
     roomCode: room.code,
     phase: room.phase,
@@ -120,10 +141,52 @@ function toRoomState(room: InternalRoom): RoomState {
     submittedPlayerIds: [...room.submitted],
     deck: publicDeck(room),
     currentCardIndex: room.currentCardIndex,
-    activePlayerId: activePlayerId(room),
+    activePlayerId: active,
     truthAnswer: room.truthAnswer,
     truthAdvanceAt: room.truthAdvanceAt,
+    gameMode: room.gameMode,
+    subjectPlayerId: room.subjectPlayerId,
+    authorPlayerId: room.authorPlayerId,
+    pickedKind: room.pickedKind,
+    authorDeadlineAt: room.authorDeadlineAt,
+    spotCard: room.spotCard,
+    pickAuthorRound: room.pickAuthorRound,
   };
+}
+
+function pickRandomAuthor(room: InternalRoom, subjectId: string): string {
+  const pool = room.playerOrder.filter((id) => id !== subjectId);
+  return pool[Math.floor(Math.random() * pool.length)]!;
+}
+
+function clearAuthorTimer(room: InternalRoom) {
+  if (room.authorTimer) {
+    clearTimeout(room.authorTimer);
+    room.authorTimer = null;
+  }
+  room.authorDeadlineAt = null;
+}
+
+function scheduleAuthorDeadline(ioSrv: Server, room: InternalRoom) {
+  const code = room.code;
+  clearAuthorTimer(room);
+  room.authorDeadlineAt = Date.now() + AUTHOR_PROMPT_MS;
+  room.authorTimer = setTimeout(() => {
+    const r = rooms.get(code);
+    if (!r || r.phase !== 'authorPrompt' || !r.pickedKind) return;
+    clearAuthorTimer(r);
+    r.spotCard = {
+      kind: r.pickedKind,
+      text:
+        r.pickedKind === 'truth'
+          ? 'Time ran out — ask them any truth question you want!'
+          : 'Time ran out — give them a quick dare on the spot!',
+    };
+    r.phase = 'revealTurn';
+    r.pickedKind = null;
+    r.authorPlayerId = null;
+    ioSrv.to(code).emit('room_state', toRoomState(r));
+  }, AUTHOR_PROMPT_MS);
 }
 
 function validateCardBatch(
@@ -201,7 +264,7 @@ function leaveRoom(io: Server, socketId: string) {
   }
 
   if (room.phase === 'turn' || room.phase === 'shuffling') {
-    const ap = activePlayerId(room);
+    const ap = activePlayerIdDeck(room);
     if (ap && !room.players.has(ap)) {
       room.phase = 'lobby';
       room.deck = [];
@@ -211,6 +274,41 @@ function leaveRoom(io: Server, socketId: string) {
       room.pendingAdvance = false;
       room.submitted.clear();
       room.cardStorage.clear();
+    }
+  }
+
+  if (['pickType', 'authorPrompt', 'revealTurn'].includes(room.phase)) {
+    const subjectGone = room.subjectPlayerId && !room.players.has(room.subjectPlayerId);
+    const authorGone =
+      room.phase === 'authorPrompt' &&
+      room.authorPlayerId &&
+      !room.players.has(room.authorPlayerId);
+    if (subjectGone) {
+      clearAuthorTimer(room);
+      room.phase = 'lobby';
+      room.subjectPlayerId = null;
+      room.authorPlayerId = null;
+      room.pickedKind = null;
+      room.spotCard = null;
+      room.truthAnswer = null;
+      room.truthAdvanceAt = null;
+      room.pendingAdvance = false;
+    } else if (authorGone && room.subjectPlayerId) {
+      clearAuthorTimer(room);
+      const pool = room.playerOrder.filter((id) => id !== room.subjectPlayerId);
+      if (pool.length === 0) {
+        room.phase = 'lobby';
+        room.subjectPlayerId = null;
+        room.authorPlayerId = null;
+        room.pickedKind = null;
+        room.spotCard = null;
+        room.truthAnswer = null;
+        room.truthAdvanceAt = null;
+        room.pendingAdvance = false;
+      } else {
+        room.authorPlayerId = pickRandomAuthor(room, room.subjectPlayerId);
+        scheduleAuthorDeadline(io, room);
+      }
     }
   }
 
@@ -299,6 +397,14 @@ io.on('connection', (socket) => {
       truthAnswer: null,
       truthAdvanceAt: null,
       pendingAdvance: false,
+      gameMode: 'sharedDeck',
+      subjectPlayerId: null,
+      authorPlayerId: null,
+      pickedKind: null,
+      authorDeadlineAt: null,
+      spotCard: null,
+      pickAuthorRound: 0,
+      authorTimer: null,
     };
     rooms.set(code, room);
     socket.join(code);
@@ -329,7 +435,9 @@ io.on('connection', (socket) => {
       ack?.({ ok: false, error: 'Room not found.' });
       return;
     }
-    if (['shuffling', 'turn', 'finished'].includes(room.phase)) {
+    if (
+      ['shuffling', 'turn', 'finished', 'pickType', 'authorPrompt', 'revealTurn'].includes(room.phase)
+    ) {
       ack?.({ ok: false, error: 'This game already started. Ask for a new room.' });
       return;
     }
@@ -371,10 +479,153 @@ io.on('connection', (socket) => {
       return;
     }
 
+    room.gameMode = 'sharedDeck';
     room.phase = 'writingCards';
     room.submitted.clear();
     room.cardStorage.clear();
     room.pendingAdvance = false;
+    clearAuthorTimer(room);
+    room.subjectPlayerId = null;
+    room.authorPlayerId = null;
+    room.pickedKind = null;
+    room.spotCard = null;
+    room.authorDeadlineAt = null;
+    ack?.({ ok: true });
+    io.to(code).emit('room_state', toRoomState(room));
+  });
+
+  socket.on('set_game_mode', (payload: { hostToken: string; gameMode: GameMode }, ack) => {
+    const code = socketRoom.get(socket.id);
+    if (!code) {
+      ack?.({ ok: false, error: 'Not in a room.' });
+      return;
+    }
+    const room = rooms.get(code);
+    if (!room || room.hostSocketId !== socket.id || payload?.hostToken !== room.hostToken) {
+      ack?.({ ok: false, error: 'Only the host can change mode.' });
+      return;
+    }
+    if (room.phase !== 'lobby') {
+      ack?.({ ok: false, error: 'Can only change mode in the lobby.' });
+      return;
+    }
+    const m = payload?.gameMode;
+    if (m !== 'sharedDeck' && m !== 'pickAndWrite') {
+      ack?.({ ok: false, error: 'Invalid game mode.' });
+      return;
+    }
+    room.gameMode = m;
+    ack?.({ ok: true });
+    io.to(code).emit('room_state', toRoomState(room));
+  });
+
+  socket.on('start_pick_author', (payload: { hostToken: string }, ack) => {
+    const code = socketRoom.get(socket.id);
+    if (!code) {
+      ack?.({ ok: false, error: 'Not in a room.' });
+      return;
+    }
+    const room = rooms.get(code);
+    if (!room || room.hostSocketId !== socket.id || payload?.hostToken !== room.hostToken) {
+      ack?.({ ok: false, error: 'Only the host can start.' });
+      return;
+    }
+    if (room.phase !== 'lobby') {
+      ack?.({ ok: false, error: 'Already started.' });
+      return;
+    }
+    if (room.players.size < 2) {
+      ack?.({ ok: false, error: 'Need at least 2 players.' });
+      return;
+    }
+    if (room.gameMode !== 'pickAndWrite') {
+      ack?.({ ok: false, error: 'Switch to “Pick & write” mode first.' });
+      return;
+    }
+
+    clearAuthorTimer(room);
+    room.gameMode = 'pickAndWrite';
+    room.phase = 'pickType';
+    room.pickAuthorRound = 0;
+    room.subjectPlayerId = room.playerOrder[0]!;
+    room.authorPlayerId = null;
+    room.pickedKind = null;
+    room.spotCard = null;
+    room.truthAnswer = null;
+    room.truthAdvanceAt = null;
+    room.pendingAdvance = false;
+    room.deck = [];
+    room.currentCardIndex = 0;
+    room.submitted.clear();
+    room.cardStorage.clear();
+    room.authorDeadlineAt = null;
+
+    ack?.({ ok: true });
+    io.to(code).emit('room_state', toRoomState(room));
+  });
+
+  socket.on('pick_truth_or_dare', (payload: { choice: CardKind }, ack) => {
+    const code = socketRoom.get(socket.id);
+    if (!code) {
+      ack?.({ ok: false, error: 'Not in a room.' });
+      return;
+    }
+    const room = rooms.get(code);
+    if (!room || room.phase !== 'pickType' || !room.subjectPlayerId) {
+      ack?.({ ok: false, error: 'Not choosing right now.' });
+      return;
+    }
+    if (socket.id !== room.subjectPlayerId) {
+      ack?.({ ok: false, error: 'Only the player whose turn it is can choose.' });
+      return;
+    }
+    const choice = payload?.choice;
+    if (choice !== 'truth' && choice !== 'dare') {
+      ack?.({ ok: false, error: 'Pick truth or dare.' });
+      return;
+    }
+
+    room.pickedKind = choice;
+    room.authorPlayerId = pickRandomAuthor(room, room.subjectPlayerId);
+    room.phase = 'authorPrompt';
+    scheduleAuthorDeadline(io, room);
+
+    ack?.({ ok: true });
+    io.to(code).emit('room_state', toRoomState(room));
+  });
+
+  socket.on('submit_author_prompt', (payload: { text: string }, ack) => {
+    const code = socketRoom.get(socket.id);
+    if (!code) {
+      ack?.({ ok: false, error: 'Not in a room.' });
+      return;
+    }
+    const room = rooms.get(code);
+    if (!room || room.phase !== 'authorPrompt' || !room.authorPlayerId || !room.pickedKind) {
+      ack?.({ ok: false, error: 'Not writing a prompt right now.' });
+      return;
+    }
+    if (socket.id !== room.authorPlayerId) {
+      ack?.({ ok: false, error: 'You were not picked to write this prompt.' });
+      return;
+    }
+
+    const text = (payload?.text ?? '').trim();
+    if (!text) {
+      ack?.({ ok: false, error: 'Write something.' });
+      return;
+    }
+    if (text.length > MAX_CARD_TEXT_LENGTH) {
+      ack?.({ ok: false, error: `Max ${MAX_CARD_TEXT_LENGTH} characters.` });
+      return;
+    }
+
+    clearAuthorTimer(room);
+    room.spotCard = { kind: room.pickedKind, text };
+    room.pickedKind = null;
+    room.authorPlayerId = null;
+    room.phase = 'revealTurn';
+
     ack?.({ ok: true });
     io.to(code).emit('room_state', toRoomState(room));
   });
@@ -481,16 +732,22 @@ io.on('connection', (socket) => {
       return;
     }
     const room = rooms.get(code);
-    if (!room || room.phase !== 'turn') {
+    if (!room || (room.phase !== 'turn' && room.phase !== 'revealTurn')) {
       ack?.({ ok: false, error: 'Not your turn to answer.' });
       return;
     }
-    const active = activePlayerId(room);
-    if (active !== socket.id) {
+
+    const subjectId =
+      room.phase === 'revealTurn' ? room.subjectPlayerId : activePlayerIdDeck(room);
+    if (!subjectId || subjectId !== socket.id) {
       ack?.({ ok: false, error: 'Only the active player can answer.' });
       return;
     }
-    const card = room.deck[room.currentCardIndex];
+
+    const card =
+      room.phase === 'revealTurn'
+        ? room.spotCard
+        : room.deck[room.currentCardIndex];
     if (!card || card.kind !== 'truth') {
       ack?.({ ok: false, error: 'Current card is not a Truth.' });
       return;
@@ -521,8 +778,11 @@ io.on('connection', (socket) => {
 
     setTimeout(() => {
       const r = rooms.get(code);
-      if (r) {
-        r.pendingAdvance = false;
+      if (!r) return;
+      r.pendingAdvance = false;
+      if (r.phase === 'revealTurn' && r.gameMode === 'pickAndWrite') {
+        advancePickAuthorTurn(io, r);
+      } else {
         advanceCard(io, r);
       }
     }, TRUTH_ANSWER_DISPLAY_MS);
@@ -536,16 +796,22 @@ io.on('connection', (socket) => {
       return;
     }
     const room = rooms.get(code);
-    if (!room || room.phase !== 'turn') {
+    if (!room || (room.phase !== 'turn' && room.phase !== 'revealTurn')) {
       ack?.({ ok: false, error: 'No active dare.' });
       return;
     }
-    const active = activePlayerId(room);
-    if (active !== socket.id) {
+
+    const subjectId =
+      room.phase === 'revealTurn' ? room.subjectPlayerId : activePlayerIdDeck(room);
+    if (!subjectId || subjectId !== socket.id) {
       ack?.({ ok: false, error: 'Only the active player can mark done.' });
       return;
     }
-    const card = room.deck[room.currentCardIndex];
+
+    const card =
+      room.phase === 'revealTurn'
+        ? room.spotCard
+        : room.deck[room.currentCardIndex];
     if (!card || card.kind !== 'dare') {
       ack?.({ ok: false, error: 'Current card is not a Dare.' });
       return;
@@ -556,7 +822,11 @@ io.on('connection', (socket) => {
     }
 
     room.pendingAdvance = true;
-    advanceCard(io, room);
+    if (room.phase === 'revealTurn' && room.gameMode === 'pickAndWrite') {
+      advancePickAuthorTurn(io, room);
+    } else {
+      advanceCard(io, room);
+    }
     room.pendingAdvance = false;
     ack?.({ ok: true });
   });
@@ -565,6 +835,28 @@ io.on('connection', (socket) => {
     leaveRoom(io, socket.id);
   });
 });
+
+function advancePickAuthorTurn(ioSrv: Server, room: InternalRoom) {
+  const code = room.code;
+  clearAuthorTimer(room);
+  room.truthAnswer = null;
+  room.truthAdvanceAt = null;
+  room.spotCard = null;
+  room.pickedKind = null;
+  room.authorPlayerId = null;
+  room.subjectPlayerId = null;
+  room.pendingAdvance = false;
+
+  room.pickAuthorRound += 1;
+  if (room.pickAuthorRound >= room.playerOrder.length) {
+    room.phase = 'finished';
+  } else {
+    room.phase = 'pickType';
+    room.subjectPlayerId = room.playerOrder[room.pickAuthorRound]!;
+  }
+
+  ioSrv.to(code).emit('room_state', toRoomState(room));
+}
 
 function advanceCard(ioSrv: Server, room: InternalRoom) {
   const code = room.code;

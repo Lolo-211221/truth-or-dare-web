@@ -1,8 +1,23 @@
-export type Phase = 'lobby' | 'writingCards' | 'shuffling' | 'turn' | 'finished';
+export type GameMode = 'sharedDeck' | 'pickAndWrite';
+
+export type Phase =
+  | 'lobby'
+  | 'writingCards'
+  | 'shuffling'
+  | 'turn'
+  | 'pickType'
+  | 'authorPrompt'
+  | 'revealTurn'
+  | 'finished';
 
 export type CardKind = 'truth' | 'dare';
 
 export interface PublicDeckCard {
+  kind: CardKind;
+  text: string;
+}
+
+export interface SpotCard {
   kind: CardKind;
   text: string;
 }
@@ -23,6 +38,13 @@ export interface RoomState {
   activePlayerId: string | null;
   truthAnswer: string | null;
   truthAdvanceAt: number | null;
+  gameMode: GameMode;
+  subjectPlayerId: string | null;
+  authorPlayerId: string | null;
+  pickedKind: CardKind | null;
+  authorDeadlineAt: number | null;
+  spotCard: SpotCard | null;
+  pickAuthorRound: number;
 }
 
 export const TRUTHS_PER_PLAYER = 2;

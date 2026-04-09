@@ -1,6 +1,11 @@
 # Truth or Dare — web rooms
 
-Browser game: create a room (6-character code), everyone writes **truth** and **dare** cards, the server **shuffles** the deck, then cards are played **one at a time** with **round-robin** active players. Truths use a typed answer; dares use an **I finished the dare** button.
+Browser game: create a room (6-character code). Two modes:
+
+- **Shared deck (classic):** everyone writes truths & dares, the server shuffles, then cards play **one at a time** (round robin).
+- **Pick & write:** each turn, the active player chooses **Truth or Dare**, then **one random other player** has time to write that prompt for them; then the active player answers or completes the dare.
+
+Truths use a typed answer (with a shared read delay); dares use **I finished the dare**.
 
 ## Local development
 
@@ -52,6 +57,8 @@ This builds the React app into `client/dist`, then runs `node server/dist/index.
 If the site shows **“Application failed to respond”** on Railway, it was often **binding to localhost only** (fixed in server code) or **skipping the client build** so nothing useful is served — check deploy logs for `Static UI: ...`.
 
 **Truth answer read time:** after someone submits a Truth, the next card waits **10 seconds** by default so everyone can read. Override on the server with env **`TRUTH_ANSWER_DISPLAY_MS`** (milliseconds, clamped between 3000 and 120000).
+
+**Pick & write author timer:** default **90 seconds** to write the prompt. Override with **`AUTHOR_PROMPT_MS`** (clamped between 15000 and 300000).
 
 No separate static host is required: one Node process serves both the SPA and real-time traffic.
 

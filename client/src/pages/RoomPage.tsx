@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useLocation, useParams } from 'react-router-dom';
-import type { RoomState } from '@shared';
+import type { GameMode, RoomState } from '@shared';
 import {
   DARES_PER_PLAYER,
   MAX_CARD_TEXT_LENGTH,
@@ -44,6 +44,7 @@ export default function RoomPage() {
   const [truths, setTruths] = useState<string[]>(() => Array(TRUTHS_PER_PLAYER).fill(''));
   const [dares, setDares] = useState<string[]>(() => Array(DARES_PER_PLAYER).fill(''));
   const [truthAnswer, setTruthAnswer] = useState('');
+  const [authorDraft, setAuthorDraft] = useState('');
   const [nowTick, setNowTick] = useState(() => Date.now());
 
   useEffect(() => {
@@ -59,10 +60,10 @@ export default function RoomPage() {
   }, []);
 
   useEffect(() => {
-    if (state?.truthAdvanceAt == null) return;
+    if (state?.truthAdvanceAt == null && state?.authorDeadlineAt == null) return;
     const id = setInterval(() => setNowTick(Date.now()), 500);
     return () => clearInterval(id);
-  }, [state?.truthAdvanceAt]);
+  }, [state?.truthAdvanceAt, state?.authorDeadlineAt]);
 
   useEffect(() => {
     const onState = (s: RoomState) => {
@@ -119,6 +120,11 @@ export default function RoomPage() {
       ? null
       : Math.max(0, Math.ceil((state.truthAdvanceAt - nowTick) / 1000));
 
+  const authorSecondsLeft =
+    state?.authorDeadlineAt == null
+      ? null
+      : Math.max(0, Math.ceil((state.authorDeadlineAt - nowTick) / 1000));
+
   const hostToken = sessionStorage.getItem(hostTokenKey(roomCode)) ?? '';
 
   const handleJoinManual = () => {
@@ -143,6 +149,35 @@ export default function RoomPage() {
     setActionError('');
     socket.emit('start_writing', { hostToken }, (res: { ok: boolean; error?: string }) => {
       if (!res?.ok) setActionError(res?.error ?? 'Failed.');
+    });
+  };
+
+  const setGameMode = (gameMode: GameMode) => {
+    setActionError('');
+    socket.emit('set_game_mode', { hostToken, gameMode }, (res: { ok: boolean; error?: string }) => {
+      if (!res?.ok) setActionError(res?.error ?? 'Could not change mode.');
+    });
+  };
+
+  const startPickAuthor = () => {
+    setActionError('');
+    socket.emit('start_pick_author', { hostToken }, (res: { ok: boolean; error?: string }) => {
+      if (!res?.ok) setActionError(res?.error ?? 'Failed.');
+    });
+  };
+
+  const pickTruthOrDare = (choice: 'truth' | 'dare') => {
+    setActionError('');
+    socket.emit('pick_truth_or_dare', { choice }, (res: { ok: boolean; error?: string }) => {
+      if (!res?.ok) setActionError(res?.error ?? 'Could not choose.');
+    });
+  };
+
+  const submitAuthorPrompt = () => {
+    setActionError('');
+    socket.emit('submit_author_prompt', { text: authorDraft }, (res: { ok: boolean; error?: string }) => {
+      if (!res?.ok) setActionError(res?.error ?? 'Could not submit prompt.');
+      else setAuthorDraft('');
     });
   };
 
@@ -209,9 +244,29 @@ export default function RoomPage() {
     );
   }
 
-  const currentCard = state.deck[state.currentCardIndex] ?? null;
+  const gameMode = state.gameMode ?? 'sharedDeck';
+
+  const currentPlayCard =
+    state.phase === 'turn'
+      ? (state.deck[state.currentCardIndex] ?? null)
+      : state.phase === 'revealTurn'
+        ? state.spotCard
+        : null;
+
   const iAmActive = state.activePlayerId === myId;
   const activeName = state.players.find((p) => p.id === state.activePlayerId)?.name ?? '…';
+
+  const subjectName =
+    state.subjectPlayerId == null
+      ? '…'
+      : (state.players.find((p) => p.id === state.subjectPlayerId)?.name ?? '…');
+  const authorName =
+    state.authorPlayerId == null
+      ? '…'
+      : (state.players.find((p) => p.id === state.authorPlayerId)?.name ?? '…');
+
+  const iAmSubject = state.subjectPlayerId === myId;
+  const iAmAuthor = state.authorPlayerId === myId;
 
   return (
     <>
@@ -244,15 +299,57 @@ export default function RoomPage() {
                 </li>
               ))}
             </ul>
+
             {isHost ? (
-              <button
-                type="button"
-                className="btn-primary"
-                onClick={startWriting}
-                disabled={state.players.length < 2}
-              >
-                Start writing cards
-              </button>
+              <div className="card-panel" style={{ marginTop: '1rem', padding: '1rem' }}>
+                <h2 style={{ marginTop: 0 }}>Game mode</h2>
+                <p className="muted" style={{ marginTop: 0 }}>
+                  Classic: everyone writes truths & dares, then you shuffle. Pick &amp; write: each turn one
+                  person chooses Truth or Dare, then <strong>one random player</strong> writes the prompt for
+                  them.
+                </p>
+                <button
+                  type="button"
+                  className={gameMode === 'sharedDeck' ? 'btn-primary' : 'btn-secondary'}
+                  onClick={() => setGameMode('sharedDeck')}
+                >
+                  Shared deck (classic)
+                </button>
+                <button
+                  type="button"
+                  className={gameMode === 'pickAndWrite' ? 'btn-primary' : 'btn-secondary'}
+                  onClick={() => setGameMode('pickAndWrite')}
+                >
+                  Pick &amp; write
+                </button>
+              </div>
+            ) : (
+              <p className="muted" style={{ marginTop: '0.75rem' }}>
+                Mode:{' '}
+                <strong>{gameMode === 'pickAndWrite' ? 'Pick & write' : 'Shared deck'}</strong>
+              </p>
+            )}
+
+            {isHost ? (
+              gameMode === 'sharedDeck' ? (
+                <button
+                  type="button"
+                  className="btn-primary"
+                  onClick={startWriting}
+                  disabled={state.players.length < 2}
+                >
+                  Start writing cards
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="btn-primary"
+                  onClick={startPickAuthor}
+                  disabled={state.players.length < 2}
+                >
+                  Start pick &amp; write game
+                </button>
+              )
             ) : (
               <p className="muted">Waiting for the host to start…</p>
             )}
@@ -339,6 +436,69 @@ export default function RoomPage() {
         </section>
       )}
 
+      {state.phase === 'pickType' && (
+        <section>
+          <h1>Pick &amp; write</h1>
+          <p className="muted">
+            Turn {state.pickAuthorRound + 1} of {state.players.length}
+          </p>
+          <div className="card-panel">
+            <p className="prompt-text" style={{ fontSize: '1.05rem' }}>
+              <strong>{subjectName}</strong>, choose:
+            </p>
+            {iAmSubject ? (
+              <>
+                <button type="button" className="btn-primary" onClick={() => pickTruthOrDare('truth')}>
+                  Truth
+                </button>
+                <button type="button" className="btn-dare" onClick={() => pickTruthOrDare('dare')}>
+                  Dare
+                </button>
+              </>
+            ) : (
+              <p className="muted">Waiting for {subjectName} to pick Truth or Dare…</p>
+            )}
+          </div>
+        </section>
+      )}
+
+      {state.phase === 'authorPrompt' && (
+        <section>
+          <h1>Write the prompt</h1>
+          <p className="muted">
+            {subjectName} chose <strong>{state.pickedKind}</strong>.{' '}
+            <strong>{authorName}</strong> must write it.
+            {authorSecondsLeft != null ? (
+              <>
+                {' '}
+                Time left: <strong>{authorSecondsLeft}s</strong>
+              </>
+            ) : null}
+          </p>
+          <div className="card-panel">
+            {iAmAuthor ? (
+              <>
+                <label htmlFor="author-prompt">Your {state.pickedKind} for {subjectName}</label>
+                <textarea
+                  id="author-prompt"
+                  value={authorDraft}
+                  onChange={(e) => setAuthorDraft(e.target.value)}
+                  maxLength={MAX_CARD_TEXT_LENGTH}
+                  placeholder={state.pickedKind === 'truth' ? 'What should they answer truthfully?' : 'What should they do?'}
+                />
+                <button type="button" className="btn-primary" onClick={submitAuthorPrompt}>
+                  Lock in prompt
+                </button>
+              </>
+            ) : (
+              <p className="muted">
+                Waiting for <strong>{authorName}</strong> to write the {state.pickedKind}…
+              </p>
+            )}
+          </div>
+        </section>
+      )}
+
       {state.phase === 'shuffling' && (
         <section>
           <h1>Shuffling</h1>
@@ -346,25 +506,31 @@ export default function RoomPage() {
         </section>
       )}
 
-      {state.phase === 'turn' && currentCard && (
+      {(state.phase === 'turn' || state.phase === 'revealTurn') && currentPlayCard && (
         <section>
-          <h1>Round {state.currentCardIndex + 1}</h1>
+          <h1>
+            {state.phase === 'revealTurn'
+              ? `Pick & write — turn ${state.pickAuthorRound + 1} of ${state.players.length}`
+              : `Round ${state.currentCardIndex + 1}`}
+          </h1>
           <p className="muted">
-            Card {state.currentCardIndex + 1} of {state.deck.length}
+            {state.phase === 'revealTurn'
+              ? `${subjectName} is up`
+              : `Card ${state.currentCardIndex + 1} of ${state.deck.length}`}
           </p>
 
           <div className="card-panel">
-            <span className={currentCard.kind === 'truth' ? 'tag tag-truth' : 'tag tag-dare'}>
-              {currentCard.kind}
+            <span className={currentPlayCard.kind === 'truth' ? 'tag tag-truth' : 'tag tag-dare'}>
+              {currentPlayCard.kind}
             </span>
-            <p className="prompt-text">{currentCard.text}</p>
+            <p className="prompt-text">{currentPlayCard.text}</p>
 
             <p className="muted">
               Active: <strong style={{ color: '#fde047' }}>{activeName}</strong>
               {iAmActive ? <span className="badge-active">your turn</span> : null}
             </p>
 
-            {currentCard.kind === 'truth' && (
+            {currentPlayCard.kind === 'truth' && (
               <>
                 {state.truthAnswer ? (
                   <div style={{ marginTop: '1rem', padding: '0.75rem', background: 'rgba(59,130,246,0.12)', borderRadius: '0.5rem' }}>
@@ -399,7 +565,7 @@ export default function RoomPage() {
               </>
             )}
 
-            {currentCard.kind === 'dare' && (
+            {currentPlayCard.kind === 'dare' && (
               <>
                 {iAmActive ? (
                   <button type="button" className="btn-dare" onClick={dareDone}>
@@ -418,7 +584,11 @@ export default function RoomPage() {
         <section>
           <h1>Done</h1>
           <div className="card-panel">
-            <p>You made it through the whole deck.</p>
+            <p>
+              {gameMode === 'pickAndWrite'
+                ? 'Everyone had their turn. Nice game!'
+                : 'You made it through the whole deck.'}
+            </p>
             <p className="muted">Start a new room from home to play again.</p>
           </div>
         </section>
