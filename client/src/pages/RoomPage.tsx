@@ -25,21 +25,31 @@ function hostTokenKey(code: string) {
 }
 
 function normalizeRoomState(s: RoomState): RoomState {
+  /** Avoid spread on null/undefined (runtime throw) and always provide arrays for .map/.length */
   const settings: RoomSettings = {
     ...DEFAULT_ROOM_SETTINGS,
-    ...s.settings,
+    ...(s.settings && typeof s.settings === 'object' ? s.settings : {}),
   };
   return {
     ...s,
+    players: Array.isArray(s.players) ? s.players : [],
+    deck: Array.isArray(s.deck) ? s.deck : [],
+    submittedPlayerIds: Array.isArray(s.submittedPlayerIds) ? s.submittedPlayerIds : [],
     settings,
     roomLocked: s.roomLocked ?? false,
     turnEndsAt: s.turnEndsAt ?? null,
-    teams: s.teams ?? [],
-    playerTeamId: s.playerTeamId ?? {},
-    teamScores: s.teamScores ?? {},
+    teams: Array.isArray(s.teams) ? s.teams : [],
+    playerTeamId: s.playerTeamId && typeof s.playerTeamId === 'object' ? s.playerTeamId : {},
+    teamScores: s.teamScores && typeof s.teamScores === 'object' ? s.teamScores : {},
     teamRevealActive: s.teamRevealActive ?? false,
     voteSession: s.voteSession ?? null,
-    deckRecentIndices: s.deckRecentIndices ?? [],
+    deckRecentIndices: Array.isArray(s.deckRecentIndices) ? s.deckRecentIndices : [],
+    gameMode: (s.gameMode ?? 'sharedDeck') as GameMode,
+    phase: s.phase ?? 'lobby',
+    currentCardIndex: typeof s.currentCardIndex === 'number' ? s.currentCardIndex : 0,
+    hostId: s.hostId ?? '',
+    roomCode: s.roomCode ?? '',
+    pickAuthorRound: typeof s.pickAuthorRound === 'number' ? s.pickAuthorRound : 0,
   };
 }
 

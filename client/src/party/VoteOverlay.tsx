@@ -75,7 +75,9 @@ export function VoteOverlay({
     return m;
   }, [players]);
 
-  const totalVotes = vote.voteCount;
+  const candidates = vote.candidateIds ?? [];
+  const youVoted = vote.youVoted ?? false;
+  const totalVotes = vote.voteCount ?? 0;
   const ls = landslideMeta(vote.tallies, totalVotes);
 
   if (!vote.revealed) {
@@ -83,21 +85,20 @@ export function VoteOverlay({
       <div className="vote-overlay">
         <div className="vote-card">
           <h2 className="vote-question">Secret vote</h2>
-          <p className="vote-q">{vote.question}</p>
+          <p className="vote-q">{vote.question ?? ''}</p>
           <p className="muted vote-sub">
-            {vote.voteCount}/{players.length} voted · tap a {vote.mode === 'teams' ? 'team' : 'name'}
+            {totalVotes}/{players.length} voted · tap a {vote.mode === 'teams' ? 'team' : 'name'}
           </p>
           <div className="vote-candidates">
-            {vote.candidateIds.map((cid) => {
+            {candidates.map((cid) => {
               const label = candidateLabel(cid, vote, teams, nameById);
               const disabled =
-                vote.youVoted ||
-                (!vote.allowSelfVote && vote.mode === 'players' && cid === myId);
+                youVoted || (!vote.allowSelfVote && vote.mode === 'players' && cid === myId);
               return (
                 <button
                   key={cid}
                   type="button"
-                  className={`vote-chip ${vote.youVoted ? 'vote-chip-disabled' : ''}`}
+                  className={`vote-chip ${youVoted ? 'vote-chip-disabled' : ''}`}
                   disabled={disabled || !myId}
                   onClick={() => onVote(cid)}
                 >
@@ -106,7 +107,7 @@ export function VoteOverlay({
               );
             })}
           </div>
-          {vote.youVoted ? <p className="vote-sealed">Vote locked in</p> : null}
+          {youVoted ? <p className="vote-sealed">Vote locked in</p> : null}
         </div>
       </div>
     );
@@ -125,7 +126,7 @@ export function VoteOverlay({
             <p className="vote-q">{vote.question}</p>
             {ls ? <p className="vote-landslide">Landslide · {ls.n} votes</p> : null}
             <div className="vote-bars">
-              {vote.candidateIds.map((cid) => {
+              {candidates.map((cid) => {
                 const n = vote.tallies?.[cid] ?? 0;
                 const label = candidateLabel(cid, vote, teams, nameById);
                 const pct = totalVotes ? Math.round((n / totalVotes) * 100) : 0;
