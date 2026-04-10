@@ -3,7 +3,7 @@ import { useCallback, useRef } from 'react';
 type SfxKind = 'tick' | 'drum' | 'airhorn';
 
 /** Lightweight Web Audio cues — no external assets required. */
-export function usePartySfx() {
+export function usePartySfx(soundEnabled = true) {
   const ctxRef = useRef<AudioContext | null>(null);
 
   const getCtx = useCallback(() => {
@@ -16,6 +16,7 @@ export function usePartySfx() {
 
   const play = useCallback(
     (kind: SfxKind) => {
+      if (!soundEnabled) return;
       const ctx = getCtx();
       if (!ctx) return;
       if (ctx.state === 'suspended') void ctx.resume();
@@ -73,7 +74,7 @@ export function usePartySfx() {
         o.stop(t0 + 0.25);
       }
     },
-    [getCtx],
+    [getCtx, soundEnabled],
   );
 
   return { play };

@@ -19,6 +19,7 @@ import type {
   RoomSettings,
   RoomState,
   TeamInfo,
+  TruthDarePlayStyle,
   VoteSessionState,
 } from './sharedTypes.js';
 import {
@@ -85,6 +86,28 @@ const PARTY_MOMENTS: Omit<PartyMomentPayload, 'id'>[] = [
     sound: 'airhorn',
     confetti: true,
   },
+  {
+    category: 'funny',
+    title: 'Plot twist',
+    imageUrl: 'https://media.giphy.com/media/3o7btO04D7zObfNBqy/giphy.gif',
+    sound: 'drum',
+    shake: true,
+  },
+  {
+    category: 'savage',
+    title: 'Damage report',
+    imageUrl: 'https://media.giphy.com/media/l3q2Z6S6nU3ulc6G6/giphy.gif',
+    sound: 'tick',
+    confetti: true,
+  },
+  {
+    category: 'chaotic',
+    title: 'Main character moment',
+    imageUrl: 'https://media.giphy.com/media/5GoVLqeAOo6PK/giphy.gif',
+    sound: 'airhorn',
+    shake: true,
+    confetti: true,
+  },
 ];
 
 function randomPartyMoment(): PartyMomentPayload {
@@ -109,15 +132,15 @@ const MLT_POOLS: Record<MostLikelyCategory, string[]> = {
     'fall in love on the first date',
     'slide into the DMs first',
   ],
-  dumb: [
+  funny: [
     'lose their keys twice in one day',
     'try to microwave metal',
     'buy something off a late-night infomercial',
-    'get lost in their own neighborhood',
     'say "wait what?" during a serious talk',
     'trip on absolutely nothing',
     'forget why they walked into a room',
     'accidentally reply-all',
+    'laugh so hard they snort in public',
   ],
   college: [
     'pull an all-nighter for the wrong exam',
@@ -129,7 +152,7 @@ const MLT_POOLS: Record<MostLikelyCategory, string[]> = {
     'submit at 11:59 PM',
     'become best friends with the Uber driver',
   ],
-  embarrassing: [
+  chaotic: [
     'call the teacher "mom"',
     'wave back at someone who wasn\'t waving',
     'laugh at the wrong moment',
@@ -138,6 +161,7 @@ const MLT_POOLS: Record<MostLikelyCategory, string[]> = {
     'trip in front of a crowd',
     'forget someone\'s name immediately',
     'get caught talking to themselves',
+    'start drama "just for fun"',
   ],
 };
 
@@ -203,7 +227,17 @@ function defaultRoomSettings(): RoomSettings {
     teamsEnabled: false,
     preventSelfVoteDefault: true,
     mostLikelyCategory: 'spicy',
+    truthDarePlayStyle: 'mixed',
+    mltDeckSource: 'mixed',
   };
+}
+
+function migrateMostLikelyCategory(raw: unknown): MostLikelyCategory {
+  const d = defaultRoomSettings().mostLikelyCategory;
+  if (raw === 'funny' || raw === 'college' || raw === 'chaotic' || raw === 'spicy') return raw;
+  if (raw === 'dumb') return 'funny';
+  if (raw === 'embarrassing') return 'chaotic';
+  return d;
 }
 
 function clampRoomSettings(p: Partial<RoomSettings>): RoomSettings {
@@ -211,14 +245,33 @@ function clampRoomSettings(p: Partial<RoomSettings>): RoomSettings {
   const rawTurn = Number(p.turnTimerSeconds ?? d.turnTimerSeconds);
   const allowed = new Set([0, 15, 30, 60, -1]);
   const turnTimerSeconds = allowed.has(rawTurn) ? rawTurn : d.turnTimerSeconds;
-  const mcat = p.mostLikelyCategory;
-  const mostLikelyCategory =
-    mcat === 'spicy' || mcat === 'dumb' || mcat === 'college' || mcat === 'embarrassing'
-      ? mcat
-      : d.mostLikelyCategory;
+  const mostLikelyCategory = migrateMostLikelyCategory(p.mostLikelyCategory ?? d.mostLikelyCategory);
+
+  const tds = p.truthDarePlayStyle as TruthDarePlayStyle | undefined;
+  const truthDarePlayStyle: TruthDarePlayStyle =
+    tds === 'truthOnly' || tds === 'dareOnly' || tds === 'mixed' ? tds : d.truthDarePlayStyle;
+
+  const mltSrc = p.mltDeckSource;
+  const mltDeckSource =
+    mltSrc === 'builtin' || mltSrc === 'custom' || mltSrc === 'mixed' ? mltSrc : d.mltDeckSource;
+
+  let truthsPerPlayer = Math.round(Number(p.truthsPerPlayer ?? d.truthsPerPlayer));
+  let daresPerPlayer = Math.round(Number(p.daresPerPlayer ?? d.daresPerPlayer));
+
+  if (truthDarePlayStyle === 'truthOnly') {
+    truthsPerPlayer = Math.min(10, Math.max(1, truthsPerPlayer || d.truthsPerPlayer));
+    daresPerPlayer = 0;
+  } else if (truthDarePlayStyle === 'dareOnly') {
+    daresPerPlayer = Math.min(10, Math.max(1, daresPerPlayer || d.daresPerPlayer));
+    truthsPerPlayer = 0;
+  } else {
+    truthsPerPlayer = Math.min(10, Math.max(1, truthsPerPlayer || d.truthsPerPlayer));
+    daresPerPlayer = Math.min(10, Math.max(1, daresPerPlayer || d.daresPerPlayer));
+  }
+
   return {
-    truthsPerPlayer: Math.min(10, Math.max(1, Math.round(Number(p.truthsPerPlayer ?? d.truthsPerPlayer)))),
-    daresPerPlayer: Math.min(10, Math.max(1, Math.round(Number(p.daresPerPlayer ?? d.daresPerPlayer)))),
+    truthsPerPlayer,
+    daresPerPlayer,
     truthAnswerDisplayMs: Math.min(
       120_000,
       Math.max(3000, Math.round(Number(p.truthAnswerDisplayMs ?? d.truthAnswerDisplayMs))),
@@ -233,6 +286,8 @@ function clampRoomSettings(p: Partial<RoomSettings>): RoomSettings {
     teamsEnabled: Boolean(p.teamsEnabled ?? d.teamsEnabled),
     preventSelfVoteDefault: Boolean(p.preventSelfVoteDefault ?? d.preventSelfVoteDefault),
     mostLikelyCategory,
+    truthDarePlayStyle,
+    mltDeckSource,
   };
 }
 
@@ -468,6 +523,18 @@ function pickRandomAuthor(room: InternalRoom, subjectId: string): string {
   return pool[Math.floor(Math.random() * pool.length)]!;
 }
 
+/** Skip Truth/Dare buttons when host chose truth-only or dare-only play style. */
+function resolvePickTypeIfAuto(ioSrv: Server, room: InternalRoom) {
+  const style = room.settings.truthDarePlayStyle ?? 'mixed';
+  if (room.phase !== 'pickType' || !room.subjectPlayerId) return;
+  if (style === 'mixed') return;
+  clearTurnTimer(room);
+  room.pickedKind = style === 'truthOnly' ? 'truth' : 'dare';
+  room.authorPlayerId = pickRandomAuthor(room, room.subjectPlayerId);
+  room.phase = 'authorPrompt';
+  scheduleAuthorDeadline(ioSrv, room);
+}
+
 function clearAuthorTimer(room: InternalRoom) {
   if (room.authorTimer) {
     clearTimeout(room.authorTimer);
@@ -557,7 +624,9 @@ function forceSkipRound(ioSrv: Server, room: InternalRoom) {
   }
 
   if (room.phase === 'pickType' && room.subjectPlayerId) {
-    const choice: CardKind = Math.random() < 0.5 ? 'truth' : 'dare';
+    const style = room.settings.truthDarePlayStyle ?? 'mixed';
+    const choice: CardKind =
+      style === 'truthOnly' ? 'truth' : style === 'dareOnly' ? 'dare' : Math.random() < 0.5 ? 'truth' : 'dare';
     room.pickedKind = choice;
     room.authorPlayerId = pickRandomAuthor(room, room.subjectPlayerId);
     room.phase = 'authorPrompt';
@@ -617,8 +686,9 @@ function validateCardBatch(
 ): { ok: true } | { ok: false; error: string } {
   const tp = room.settings.truthsPerPlayer;
   const dp = room.settings.daresPerPlayer;
+  const mltSrc = room.settings.mltDeckSource ?? 'mixed';
 
-  if (room.gameMode === 'neverHaveIEver' || room.gameMode === 'mostLikelyTo') {
+  if (room.gameMode === 'neverHaveIEver') {
     if (truths.length !== tp || dares.length !== 0) {
       return {
         ok: false,
@@ -630,6 +700,76 @@ function validateCardBatch(
       if (!s) return { ok: false, error: 'Prompts cannot be empty.' };
       if (s.length > MAX_CARD_TEXT_LENGTH) {
         return { ok: false, error: `Max ${MAX_CARD_TEXT_LENGTH} characters per line.` };
+      }
+    }
+    return { ok: true };
+  }
+
+  if (room.gameMode === 'mostLikelyTo') {
+    if (mltSrc === 'builtin') {
+      return { ok: true };
+    }
+    if (mltSrc === 'custom') {
+      if (truths.length !== tp || dares.length !== 0) {
+        return {
+          ok: false,
+          error: `Need exactly ${tp} custom prompts (no dare slots).`,
+        };
+      }
+      for (const t of truths) {
+        const s = t.trim();
+        if (!s) return { ok: false, error: 'Prompts cannot be empty.' };
+        if (s.length > MAX_CARD_TEXT_LENGTH) {
+          return { ok: false, error: `Max ${MAX_CARD_TEXT_LENGTH} characters per line.` };
+        }
+      }
+      return { ok: true };
+    }
+    if (truths.length !== tp || dares.length !== 0) {
+      return {
+        ok: false,
+        error: `Need exactly ${tp} prompts and no dare slots for this mode.`,
+      };
+    }
+    for (const t of truths) {
+      const s = t.trim();
+      if (!s) return { ok: false, error: 'Prompts cannot be empty.' };
+      if (s.length > MAX_CARD_TEXT_LENGTH) {
+        return { ok: false, error: `Max ${MAX_CARD_TEXT_LENGTH} characters per line.` };
+      }
+    }
+    return { ok: true };
+  }
+
+  const style = room.settings.truthDarePlayStyle ?? 'mixed';
+  if (style === 'truthOnly') {
+    if (truths.length !== tp || dares.length !== 0) {
+      return {
+        ok: false,
+        error: `Need exactly ${tp} truths and no dares.`,
+      };
+    }
+    for (const t of truths) {
+      const s = t.trim();
+      if (!s) return { ok: false, error: 'Cards cannot be empty.' };
+      if (s.length > MAX_CARD_TEXT_LENGTH) {
+        return { ok: false, error: `Max ${MAX_CARD_TEXT_LENGTH} characters per card.` };
+      }
+    }
+    return { ok: true };
+  }
+  if (style === 'dareOnly') {
+    if (dares.length !== dp || truths.length !== 0) {
+      return {
+        ok: false,
+        error: `Need exactly ${dp} dares and no truths.`,
+      };
+    }
+    for (const t of dares) {
+      const s = t.trim();
+      if (!s) return { ok: false, error: 'Cards cannot be empty.' };
+      if (s.length > MAX_CARD_TEXT_LENGTH) {
+        return { ok: false, error: `Max ${MAX_CARD_TEXT_LENGTH} characters per card.` };
       }
     }
     return { ok: true };
@@ -670,19 +810,40 @@ function buildMltDeck(room: InternalRoom): InternalCard[] {
     const pack = room.cardStorage.get(sid);
     if (!pack) continue;
     for (const text of pack.truths) {
-      playerCards.push({ kind: 'mlt', text: text.trim(), authorId: sid });
+      const t = text.trim();
+      if (!t) continue;
+      playerCards.push({ kind: 'mlt', text: t, authorId: sid });
     }
   }
   const cat = room.settings.mostLikelyCategory;
-  const pool = MLT_POOLS[cat] ?? [];
+  const pool = MLT_POOLS[cat] ?? MLT_POOLS.spicy;
+  const source = room.settings.mltDeckSource ?? 'mixed';
+
+  if (source === 'custom') {
+    if (playerCards.length === 0) return [];
+    return orderDeckReduceRepeats(shuffle(playerCards), room.deckRecentTexts);
+  }
+
+  if (source === 'builtin') {
+    const n = Math.max(16, Math.min(48, Math.max(room.playerOrder.length * 8, 24)));
+    const lines = shuffle([...pool]);
+    const builtin: InternalCard[] = [];
+    for (let i = 0; i < Math.min(n, lines.length); i++) {
+      builtin.push({ kind: 'mlt', text: lines[i]!, authorId: 'system' });
+    }
+    return orderDeckReduceRepeats(shuffle(builtin), room.deckRecentTexts);
+  }
+
   const taken = new Set(playerCards.map((c) => normalizeDeckText(c.text)));
   const extras = shuffle([...pool]).filter((t) => !taken.has(normalizeDeckText(t)));
   const nExtra = Math.min(12, Math.max(4, Math.floor(playerCards.length * 0.45)));
+  const merged = [...playerCards];
   for (let i = 0; i < Math.min(nExtra, extras.length); i++) {
     const text = extras[i]!;
-    playerCards.push({ kind: 'mlt', text, authorId: 'system' });
+    merged.push({ kind: 'mlt', text, authorId: 'system' });
   }
-  return orderDeckReduceRepeats(shuffle(playerCards), room.deckRecentTexts);
+  if (merged.length === 0) return [];
+  return orderDeckReduceRepeats(shuffle(merged), room.deckRecentTexts);
 }
 
 function buildDeck(room: InternalRoom): InternalCard[] {
@@ -1112,9 +1273,11 @@ io.on('connection', (socket) => {
     room.cardStorage.clear();
     room.authorDeadlineAt = null;
 
+    resolvePickTypeIfAuto(io, room);
+
     ack?.({ ok: true });
     emitRoomState(io, room);
-    scheduleTurnTimer(io, room);
+    if (room.phase === 'pickType') scheduleTurnTimer(io, room);
   });
 
   socket.on('pick_truth_or_dare', (payload: { choice: CardKind }, ack) => {
@@ -1135,6 +1298,15 @@ io.on('connection', (socket) => {
     const choice = payload?.choice;
     if (choice !== 'truth' && choice !== 'dare') {
       ack?.({ ok: false, error: 'Pick truth or dare.' });
+      return;
+    }
+    const style = room.settings.truthDarePlayStyle ?? 'mixed';
+    if (style === 'truthOnly' && choice !== 'truth') {
+      ack?.({ ok: false, error: 'This round is truth only.' });
+      return;
+    }
+    if (style === 'dareOnly' && choice !== 'dare') {
+      ack?.({ ok: false, error: 'This round is dare only.' });
       return;
     }
     if (room.voteSession && !room.voteSession.revealed) {
@@ -1278,7 +1450,9 @@ io.on('connection', (socket) => {
       ack?.({ ok: false, error: 'Wrong phase.' });
       return;
     }
-    if (room.submitted.size === 0) {
+    const mltBuiltin =
+      room.gameMode === 'mostLikelyTo' && (room.settings.mltDeckSource ?? 'mixed') === 'builtin';
+    if (room.submitted.size === 0 && !mltBuiltin) {
       ack?.({ ok: false, error: 'No cards submitted yet.' });
       return;
     }
@@ -1780,8 +1954,10 @@ function advancePickAuthorTurn(ioSrv: Server, room: InternalRoom) {
   room.phase = 'pickType';
   room.subjectPlayerId = room.playerOrder[room.pickAuthorRound % room.playerOrder.length]!;
 
+  resolvePickTypeIfAuto(ioSrv, room);
+
   emitRoomState(ioSrv, room);
-  scheduleTurnTimer(ioSrv, room);
+  if (room.phase === 'pickType') scheduleTurnTimer(ioSrv, room);
 }
 
 function advanceCard(ioSrv: Server, room: InternalRoom) {

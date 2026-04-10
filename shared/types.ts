@@ -1,5 +1,11 @@
 export type GameMode = 'sharedDeck' | 'pickAndWrite' | 'neverHaveIEver' | 'mostLikelyTo';
 
+/** Truth or Dare play style (shared deck + pick & write). */
+export type TruthDarePlayStyle = 'truthOnly' | 'dareOnly' | 'mixed';
+
+/** Most Likely To: whose prompts go into the deck. */
+export type MltDeckSource = 'builtin' | 'custom' | 'mixed';
+
 export type Phase =
   | 'lobby'
   | 'writingCards'
@@ -31,7 +37,8 @@ export interface Player {
 
 export type ReactionCategory = 'funny' | 'savage' | 'chaotic';
 
-export type MostLikelyCategory = 'spicy' | 'dumb' | 'college' | 'embarrassing';
+/** Built-in MLT prompt vibe (pools on server). */
+export type MostLikelyCategory = 'funny' | 'college' | 'chaotic' | 'spicy';
 
 export interface TeamInfo {
   id: string;
@@ -88,8 +95,12 @@ export interface RoomSettings {
   teamsEnabled: boolean;
   /** Default on for party votes; host can toggle per vote */
   preventSelfVoteDefault: boolean;
-  /** Weighted random for built-in question picks (future packs / MLT) */
+  /** Built-in MLT prompt pack */
   mostLikelyCategory: MostLikelyCategory;
+  /** Truth or Dare: truths only, dares only, or mixed deck / picks */
+  truthDarePlayStyle: TruthDarePlayStyle;
+  /** Most Likely To: built-ins, custom lines, or mix */
+  mltDeckSource: MltDeckSource;
 }
 
 export interface RoomState {
@@ -153,6 +164,8 @@ export const DEFAULT_ROOM_SETTINGS: RoomSettings = {
   teamsEnabled: false,
   preventSelfVoteDefault: true,
   mostLikelyCategory: 'spicy',
+  truthDarePlayStyle: 'mixed',
+  mltDeckSource: 'mixed',
 };
 
 export const MAX_CARD_TEXT_LENGTH = 200;

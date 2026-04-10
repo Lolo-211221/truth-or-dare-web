@@ -6,11 +6,13 @@ import { usePartySfx } from './usePartySfx';
 export function PartyMomentOverlay({
   moment,
   onClose,
+  soundEnabled = true,
 }: {
   moment: PartyMomentPayload;
   onClose: () => void;
+  soundEnabled?: boolean;
 }) {
-  const { play } = usePartySfx();
+  const { play } = usePartySfx(soundEnabled);
 
   useEffect(() => {
     document.body.classList.add('party-shake');

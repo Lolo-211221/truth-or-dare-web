@@ -5,12 +5,14 @@ export function TurnTimerVisual({
   turnEndsAt,
   totalSeconds,
   nowTick,
+  soundEnabled = true,
 }: {
   turnEndsAt: number | null;
   totalSeconds: number;
   nowTick: number;
+  soundEnabled?: boolean;
 }) {
-  const { play } = usePartySfx();
+  const { play } = usePartySfx(soundEnabled);
   const lastWarn = useRef(-1);
 
   const { frac, secLeft } = useMemo(() => {

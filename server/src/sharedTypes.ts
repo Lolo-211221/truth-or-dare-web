@@ -1,5 +1,9 @@
 export type GameMode = 'sharedDeck' | 'pickAndWrite' | 'neverHaveIEver' | 'mostLikelyTo';
 
+export type TruthDarePlayStyle = 'truthOnly' | 'dareOnly' | 'mixed';
+
+export type MltDeckSource = 'builtin' | 'custom' | 'mixed';
+
 export type Phase =
   | 'lobby'
   | 'writingCards'
@@ -29,7 +33,7 @@ export interface Player {
 
 export type ReactionCategory = 'funny' | 'savage' | 'chaotic';
 
-export type MostLikelyCategory = 'spicy' | 'dumb' | 'college' | 'embarrassing';
+export type MostLikelyCategory = 'funny' | 'college' | 'chaotic' | 'spicy';
 
 export interface TeamInfo {
   id: string;
@@ -70,6 +74,8 @@ export interface RoomSettings {
   teamsEnabled: boolean;
   preventSelfVoteDefault: boolean;
   mostLikelyCategory: MostLikelyCategory;
+  truthDarePlayStyle: TruthDarePlayStyle;
+  mltDeckSource: MltDeckSource;
 }
 
 export interface RoomState {

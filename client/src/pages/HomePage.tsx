@@ -13,6 +13,7 @@ export default function HomePage() {
   const [name, setName] = useState(() => sessionStorage.getItem('tod_display_name') ?? '');
   const [joinCode, setJoinCode] = useState('');
   const [error, setError] = useState('');
+  const [busy, setBusy] = useState<'create' | 'join' | null>(null);
 
   useEffect(() => {
     ensureConnected();
@@ -30,7 +31,9 @@ export default function HomePage() {
       return;
     }
     saveName(trimmed);
+    setBusy('create');
     socket.emit('create_room', { playerName: trimmed }, (res: { ok: boolean; error?: string; hostToken?: string; roomState?: RoomState }) => {
+      setBusy(null);
       if (!res?.ok) {
         setError(res?.error ?? 'Could not create room.');
         return;
@@ -55,7 +58,9 @@ export default function HomePage() {
       return;
     }
     saveName(trimmed);
+    setBusy('join');
     socket.emit('join_room', { roomCode: code, playerName: trimmed }, (res: { ok: boolean; error?: string; roomState?: RoomState }) => {
+      setBusy(null);
       if (!res?.ok) {
         setError(res?.error ?? 'Could not join.');
         return;
@@ -66,52 +71,71 @@ export default function HomePage() {
   };
 
   return (
-    <>
-      <h1>Truth or Dare</h1>
-      <p className="muted">Create a room, share the code, build a deck together, then play.</p>
+    <div className="home-wrap animate-in">
+      <header className="home-hero">
+        <p className="home-eyebrow">Party game</p>
+        <h1 className="home-title">Truth or Dare</h1>
+        <p className="home-tagline">
+          One room, QR join, live lobby — classic Truth or Dare, NHIE, and Most Likely. Built for phones.
+        </p>
+      </header>
 
-      <div className="card-panel" style={{ marginTop: '1.5rem' }}>
+      <div className="card-panel home-card home-card--name">
         <label htmlFor="name">Your name</label>
         <input
           id="name"
           value={name}
           onChange={(e) => setName(e.target.value)}
           maxLength={MAX_PLAYER_NAME_LENGTH}
-          placeholder="How should others see you?"
+          placeholder="How should friends see you?"
           autoComplete="nickname"
+          className="input-lg"
         />
       </div>
 
-      <div className="card-panel">
-        <h2>Create a room</h2>
-        <p className="muted">You will be the host and get a code to share.</p>
-        <button type="button" className="btn-primary" onClick={handleCreate}>
-          Create room
-        </button>
+      <div className="home-actions">
+        <div className="card-panel home-card home-card--cta">
+          <h2 className="home-card-title">Host a room</h2>
+          <p className="muted home-card-desc">You get the code, QR, and controls.</p>
+          <button
+            type="button"
+            className="btn-primary btn-primary-cta"
+            onClick={handleCreate}
+            disabled={busy !== null}
+          >
+            {busy === 'create' ? 'Creating…' : 'Create room'}
+          </button>
+        </div>
+
+        <div className="card-panel home-card home-card--cta">
+          <h2 className="home-card-title">Join with code</h2>
+          <label htmlFor="code">Room code</label>
+          <input
+            id="code"
+            value={joinCode}
+            onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
+            maxLength={ROOM_CODE_LENGTH}
+            placeholder="ABC123"
+            autoCapitalize="characters"
+            className="input-lg code-input"
+          />
+          <button
+            type="button"
+            className="btn-secondary btn-primary-cta"
+            onClick={handleJoin}
+            disabled={busy !== null}
+          >
+            {busy === 'join' ? 'Joining…' : 'Join room'}
+          </button>
+        </div>
       </div>
 
-      <div className="card-panel">
-        <h2>Join a room</h2>
-        <label htmlFor="code">Room code</label>
-        <input
-          id="code"
-          value={joinCode}
-          onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
-          maxLength={ROOM_CODE_LENGTH}
-          placeholder="e.g. ABC123"
-          autoCapitalize="characters"
-        />
-        <button type="button" className="btn-secondary" onClick={handleJoin}>
-          Join with code
-        </button>
-      </div>
+      {error ? <p className="error home-error">{error}</p> : null}
 
-      {error ? <p className="error">{error}</p> : null}
-
-      <p className="disclaimer">
-        Play with people you trust. Prompts and answers are visible to everyone in the room. This MVP keeps
-        rooms in server memory only (no accounts).
+      <p className="disclaimer home-disclaimer">
+        Play with people you trust. Content is visible to everyone in the room. Rooms live in server memory only
+        (no accounts).
       </p>
-    </>
+    </div>
   );
 }

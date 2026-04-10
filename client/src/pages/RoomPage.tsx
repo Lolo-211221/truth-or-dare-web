@@ -6,7 +6,6 @@ import {
   DEFAULT_ROOM_SETTINGS,
   MAX_CARD_TEXT_LENGTH,
   MAX_PLAYER_NAME_LENGTH,
-  MAX_TEAM_NAME_LENGTH,
 } from '@shared';
 import { PartyMomentOverlay } from '../party/PartyMomentOverlay';
 import { TurnTimerVisual } from '../party/TurnTimerVisual';
@@ -15,6 +14,8 @@ import { socket } from '../socket';
 import { loadNhieFavorites, toggleNhieFavorite } from '../favorites/nhieFavorites';
 import { useCardSwipe } from '../party/useCardSwipe';
 import { useLobbyMusic } from '../useLobbyMusic';
+import { LobbySettingsContent } from '../lobby/LobbySettingsContent';
+import { TeamSetupPanel } from '../lobby/TeamSetupPanel';
 
 function ensureConnected() {
   if (!socket.connected) socket.connect();
@@ -122,6 +123,10 @@ export default function RoomPage() {
   const [musicOn, setMusicOn] = useState(
     () => typeof localStorage !== 'undefined' && localStorage.getItem('tod_music_on') === '1',
   );
+  const [sfxOn, setSfxOn] = useState(
+    () => typeof localStorage === 'undefined' || localStorage.getItem('tod_sfx_on') !== '0',
+  );
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [partyMoment, setPartyMoment] = useState<PartyMomentPayload | null>(null);
   const [voteDraft, setVoteDraft] = useState('');
   const teamNameInputA = useRef<HTMLInputElement>(null);
@@ -208,14 +213,24 @@ export default function RoomPage() {
     const dp = state.settings.daresPerPlayer;
     const gm = state.gameMode;
     const nhieMlt = gm === 'neverHaveIEver' || gm === 'mostLikelyTo';
+    const tdStyle = state.settings.truthDarePlayStyle ?? 'mixed';
     queueMicrotask(() => {
-      setTruths((prev) => Array.from({ length: tp }, (_, i) => prev[i] ?? ''));
-      setDares((prev) => (nhieMlt ? [] : Array.from({ length: dp }, (_, i) => prev[i] ?? '')));
+      setTruths((prev) => {
+        if (nhieMlt) return Array.from({ length: tp }, (_, i) => prev[i] ?? '');
+        if (tdStyle === 'dareOnly') return [];
+        return Array.from({ length: tp }, (_, i) => prev[i] ?? '');
+      });
+      setDares((prev) => {
+        if (nhieMlt) return [];
+        if (tdStyle === 'truthOnly') return [];
+        return Array.from({ length: dp }, (_, i) => prev[i] ?? '');
+      });
     });
   }, [
     state,
     state?.settings?.truthsPerPlayer,
     state?.settings?.daresPerPlayer,
+    state?.settings?.truthDarePlayStyle,
     state?.phase,
     state?.gameMode,
   ]);
@@ -306,9 +321,19 @@ export default function RoomPage() {
     setActionError('');
     const gm = state?.gameMode ?? 'sharedDeck';
     const nhieMlt = gm === 'neverHaveIEver' || gm === 'mostLikelyTo';
+    const mltBuiltin = gm === 'mostLikelyTo' && (state?.settings.mltDeckSource ?? 'mixed') === 'builtin';
+    const style = state?.settings.truthDarePlayStyle ?? 'mixed';
+    if (mltBuiltin) {
+      socket.emit('submit_cards', { truths: [], dares: [] }, (res: { ok: boolean; error?: string }) => {
+        if (!res?.ok) setActionError(res?.error ?? 'Invalid cards.');
+      });
+      return;
+    }
+    const truthsOut = nhieMlt ? truths : style === 'dareOnly' ? [] : truths;
+    const daresOut = nhieMlt ? [] : style === 'truthOnly' ? [] : dares;
     socket.emit(
       'submit_cards',
-      { truths, dares: nhieMlt ? [] : dares },
+      { truths: truthsOut, dares: daresOut },
       (res: { ok: boolean; error?: string }) => {
         if (!res?.ok) setActionError(res?.error ?? 'Invalid cards.');
       },
@@ -366,8 +391,8 @@ export default function RoomPage() {
     });
   };
 
-  const restartGame = () => {
-    if (!window.confirm('Restart and return everyone to the lobby?')) return;
+  const restartGame = (fromFinished = false) => {
+    if (!fromFinished && !window.confirm('Restart and return everyone to the lobby?')) return;
     setActionError('');
     socket.emit('restart_game', { hostToken }, (res: { ok: boolean; error?: string }) => {
       if (!res?.ok) setActionError(res?.error ?? 'Could not restart.');
@@ -500,6 +525,8 @@ export default function RoomPage() {
   }
 
   const settings = state.settings ?? DEFAULT_ROOM_SETTINGS;
+  const truthDareStyle = settings.truthDarePlayStyle ?? 'mixed';
+  const mltDeckSource = settings.mltDeckSource ?? 'mixed';
   const gameMode = state.gameMode ?? 'sharedDeck';
   const totalPickTurns = state.players.length * settings.pickCycles;
   const joinUrl = origin ? `${origin}/room/${state.roomCode}` : '';
@@ -538,7 +565,11 @@ export default function RoomPage() {
       ) : null}
 
       {partyMoment ? (
-        <PartyMomentOverlay moment={partyMoment} onClose={() => setPartyMoment(null)} />
+        <PartyMomentOverlay
+          moment={partyMoment}
+          onClose={() => setPartyMoment(null)}
+          soundEnabled={sfxOn}
+        />
       ) : null}
 
       {state.teamRevealActive ? (
@@ -593,67 +624,129 @@ export default function RoomPage() {
         </div>
       ) : null}
 
-      <p className="muted" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.75rem' }}>
-        Room <strong style={{ color: '#e8ddff' }}>{state.roomCode}</strong>
-        {isHost ? <span className="badge-host">Host</span> : null}
-        <button
-          type="button"
-          className="btn-secondary"
-          style={{ width: 'auto', padding: '0.35rem 0.75rem', margin: 0 }}
-          onClick={() => {
-            const next = !musicOn;
-            setMusicOn(next);
-            localStorage.setItem('tod_music_on', next ? '1' : '0');
-          }}
-        >
-          {musicOn ? 'Music on' : 'Music off'}
-        </button>
-      </p>
+      <header className="lobby-topbar">
+        <div className="lobby-brand">
+          <span className="lobby-room-pill">
+            <span className="lobby-room-label">Room</span>
+            <button
+              type="button"
+              className="room-code-btn"
+              title="Copy code"
+              onClick={() => void navigator.clipboard.writeText(state.roomCode)}
+            >
+              {state.roomCode}
+            </button>
+          </span>
+          {isHost ? <span className="badge-host">Host</span> : null}
+        </div>
+        {isHost ? (
+          <button
+            type="button"
+            className={`btn-gear ${settingsOpen ? 'btn-gear--open' : ''}`}
+            aria-expanded={settingsOpen}
+            aria-controls="room-settings-drawer"
+            onClick={() => setSettingsOpen((o) => !o)}
+          >
+            Settings
+          </button>
+        ) : (
+          <p className="muted lobby-settings-hint">Only the host can change modes &amp; timers.</p>
+        )}
+      </header>
+
+      {isHost && settingsOpen ? (
+        <>
+          <button
+            type="button"
+            className="settings-scrim"
+            aria-label="Close settings"
+            onClick={() => setSettingsOpen(false)}
+          />
+          <div className="settings-drawer" id="room-settings-drawer" role="dialog">
+            <div className="settings-drawer-head">
+              <h2 className="settings-drawer-title">Room settings</h2>
+              <button type="button" className="btn-text" onClick={() => setSettingsOpen(false)}>
+                Done
+              </button>
+            </div>
+            <LobbySettingsContent
+              settings={settings}
+              updateRoomSettings={updateRoomSettings}
+              musicOn={musicOn}
+              onMusicToggle={(on) => {
+                setMusicOn(on);
+                localStorage.setItem('tod_music_on', on ? '1' : '0');
+              }}
+              sfxOn={sfxOn}
+              onSfxToggle={(on) => {
+                setSfxOn(on);
+                localStorage.setItem('tod_sfx_on', on ? '1' : '0');
+              }}
+            />
+          </div>
+        </>
+      ) : null}
 
       {state.phase === 'lobby' && (
-        <section>
-          <h1>Lobby</h1>
-          <p className="muted">Share this URL or the code so friends can join.</p>
-          <div className="card-panel">
-            <div className="qr-row">
+        <section className="lobby-section">
+          <div className="card-panel lobby-hero">
+            <h1 className="lobby-title">Party lobby</h1>
+            <p className="muted lobby-lead">
+              Scan the QR, share the link, or read the code out loud — the list updates live.
+            </p>
+            <div className="qr-row lobby-qr">
               {joinUrl ? (
-                <div className="qr-box" aria-hidden>
-                  <QrCode value={joinUrl} size={112} fgColor="#1a1228" bgColor="#e8ddff" />
+                <div className="qr-box qr-box--lg" aria-hidden>
+                  <QrCode value={joinUrl} size={128} fgColor="#1a1228" bgColor="#e8ddff" />
                 </div>
               ) : null}
               <div className="qr-copy">
-                <p className="muted" style={{ wordBreak: 'break-all', margin: '0 0 0.5rem' }}>
-                  {joinUrl || `…/room/${state.roomCode}`}
-                </p>
-                {joinUrl ? (
+                <p className="join-url-text">{joinUrl || `…/room/${state.roomCode}`}</p>
+                <div className="btn-row-2">
+                  {joinUrl ? (
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={() => void navigator.clipboard.writeText(joinUrl)}
+                    >
+                      Copy link
+                    </button>
+                  ) : null}
                   <button
                     type="button"
                     className="btn-secondary"
-                    style={{ marginTop: 0 }}
-                    onClick={() => void navigator.clipboard.writeText(joinUrl)}
+                    onClick={() => void navigator.clipboard.writeText(state.roomCode)}
                   >
-                    Copy link
+                    Copy code
                   </button>
-                ) : null}
+                </div>
               </div>
             </div>
-            <p className="muted lock-line">
-              {state.roomLocked ? 'Room locked — no new joins.' : 'Room open — friends can join.'}
+            <div className="lock-banner">
+              <span className={state.roomLocked ? 'lock-state lock-state--locked' : 'lock-state'}>
+                {state.roomLocked ? 'Locked — no new joins' : 'Open — friends can join'}
+              </span>
               {isHost ? (
                 <button
                   type="button"
-                  className="btn-secondary lock-toggle"
+                  className="btn-secondary btn-pill lock-toggle"
                   onClick={() => toggleRoomLock(!state.roomLocked)}
                 >
-                  {state.roomLocked ? 'Unlock' : 'Lock room'}
+                  {state.roomLocked ? 'Unlock' : 'Lock'}
                 </button>
               ) : null}
-            </p>
-            <h2>Players ({state.players.length})</h2>
-            <ul className="player-list">
+            </div>
+          </div>
+
+          <div className="card-panel lobby-players">
+            <div className="section-head">
+              <h2>Players</h2>
+              <span className="player-count">{state.players.length}</span>
+            </div>
+            <ul className="player-list player-list--lobby">
               {state.players.map((p) => (
-                <li key={p.id} className="player-row">
-                  <span>
+                <li key={p.id} className="player-row player-chip">
+                  <span className="player-chip-name">
                     {p.name}
                     {p.id === state.hostId ? <span className="badge-host">host</span> : null}
                     {p.id === myId ? <span className="badge-you">you</span> : null}
@@ -666,254 +759,165 @@ export default function RoomPage() {
                 </li>
               ))}
             </ul>
+          </div>
 
-            {isHost ? (
-              <div className="card-panel" style={{ marginTop: '1rem', padding: '1rem' }}>
-                <h2 style={{ marginTop: 0 }}>Teams (optional)</h2>
-                <p className="muted" style={{ marginTop: 0 }}>
-                  Turn on for team points and team votes. Show a reveal screen before starting.
-                </p>
-                <label className="toggle-line">
-                  <input
-                    type="checkbox"
-                    checked={settings.teamsEnabled}
-                    onChange={(e) => updateRoomSettings({ teamsEnabled: e.target.checked })}
-                  />{' '}
-                  Team mode
-                </label>
-                {settings.teamsEnabled ? (
-                  <>
-                    <div className="team-name-row">
-                      <label htmlFor="tn-a">Team 1</label>
-                      <input
-                        ref={teamNameInputA}
-                        id="tn-a"
-                        key={`ta-${teamLabelA}`}
-                        maxLength={MAX_TEAM_NAME_LENGTH}
-                        defaultValue={teamLabelA}
-                      />
-                      <label htmlFor="tn-b">Team 2</label>
-                      <input
-                        ref={teamNameInputB}
-                        id="tn-b"
-                        key={`tb-${teamLabelB}`}
-                        maxLength={MAX_TEAM_NAME_LENGTH}
-                        defaultValue={teamLabelB}
-                      />
-                    </div>
-                    <button type="button" className="btn-secondary" onClick={pushTeamNames}>
-                      Save team names
-                    </button>
-                    <button type="button" className="btn-secondary" onClick={autoBalanceTeams}>
-                      Auto-balance
-                    </button>
-                    <ul className="team-assign">
-                      {state.players.map((p) => (
-                        <li key={p.id}>
-                          {p.name}
-                          <select
-                            value={state.playerTeamId[p.id] ?? 't1'}
-                            onChange={(e) => assignTeam(p.id, e.target.value)}
-                            aria-label={`Team for ${p.name}`}
-                          >
-                            <option value="t1">{teamLabelA}</option>
-                            <option value="t2">{teamLabelB}</option>
-                          </select>
-                        </li>
-                      ))}
-                    </ul>
-                    <button type="button" className="btn-secondary" onClick={teamRevealShow}>
-                      Team reveal screen
-                    </button>
-                  </>
-                ) : null}
-              </div>
-            ) : null}
+          {isHost ? (
+            <TeamSetupPanel
+              state={state}
+              teamLabelA={teamLabelA}
+              teamLabelB={teamLabelB}
+              teamNameInputA={teamNameInputA}
+              teamNameInputB={teamNameInputB}
+              teamsEnabled={settings.teamsEnabled}
+              onSaveNames={pushTeamNames}
+              onAutoBalance={autoBalanceTeams}
+              onAssign={assignTeam}
+              onReveal={teamRevealShow}
+            />
+          ) : null}
 
-            {isHost ? (
-              <div className="card-panel" style={{ marginTop: '1rem', padding: '1rem' }}>
-                <h2 style={{ marginTop: 0 }}>Game settings</h2>
-                <p className="muted" style={{ marginTop: 0 }}>
-                  Applies to this room once you start. Everyone sees the same timers.
-                </p>
-                <label htmlFor="st-truth" style={{ marginTop: '0.5rem' }}>
-                  Truths per person (shared deck)
-                </label>
-                <input
-                  id="st-truth"
-                  type="number"
-                  min={1}
-                  max={10}
-                  value={settings.truthsPerPlayer}
-                  onChange={(e) =>
-                    updateRoomSettings({ truthsPerPlayer: Number(e.target.value) || 1 })
-                  }
-                />
-                <label htmlFor="st-dare">Dares per person (shared deck)</label>
-                <input
-                  id="st-dare"
-                  type="number"
-                  min={1}
-                  max={10}
-                  value={settings.daresPerPlayer}
-                  onChange={(e) =>
-                    updateRoomSettings({ daresPerPlayer: Number(e.target.value) || 1 })
-                  }
-                />
-                <label htmlFor="st-read">Truth answer on screen (seconds)</label>
-                <input
-                  id="st-read"
-                  type="number"
-                  min={3}
-                  max={120}
-                  value={Math.round(settings.truthAnswerDisplayMs / 1000)}
-                  onChange={(e) =>
-                    updateRoomSettings({
-                      truthAnswerDisplayMs: Math.max(3000, (Number(e.target.value) || 10) * 1000),
-                    })
-                  }
-                />
-                <label htmlFor="st-author">Time to write prompt — pick &amp; write (seconds)</label>
-                <input
-                  id="st-author"
-                  type="number"
-                  min={15}
-                  max={300}
-                  value={Math.round(settings.authorPromptMs / 1000)}
-                  onChange={(e) =>
-                    updateRoomSettings({
-                      authorPromptMs: Math.max(15000, (Number(e.target.value) || 90) * 1000),
-                    })
-                  }
-                />
-                <label htmlFor="st-cycles">Full rounds (pick &amp; write)</label>
-                <input
-                  id="st-cycles"
-                  type="number"
-                  min={1}
-                  max={10}
-                  value={settings.pickCycles}
-                  onChange={(e) =>
-                    updateRoomSettings({ pickCycles: Number(e.target.value) || 1 })
-                  }
-                />
-                <p className="muted" style={{ fontSize: '0.85rem', marginTop: '0.75rem' }}>
-                  Turn timer (pick Truth/Dare, play turns — optional)
-                </p>
-                <div className="timer-presets">
-                  {(
-                    [
-                      ['Off', 0],
-                      ['15s', 15],
-                      ['30s', 30],
-                      ['60s', 60],
-                      ['Custom', -1],
-                    ] as const
-                  ).map(([label, val]) => (
-                    <button
-                      key={label}
-                      type="button"
-                      className={
-                        settings.turnTimerSeconds === val ? 'btn-primary timer-preset' : 'btn-secondary timer-preset'
-                      }
-                      onClick={() => updateRoomSettings({ turnTimerSeconds: val })}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
-                {settings.turnTimerSeconds === -1 ? (
-                  <>
-                    <label htmlFor="st-custom-t">Custom seconds</label>
-                    <input
-                      id="st-custom-t"
-                      type="number"
-                      min={5}
-                      max={300}
-                      value={settings.turnTimerCustomSeconds}
-                      onChange={(e) =>
-                        updateRoomSettings({
-                          turnTimerCustomSeconds: Math.min(300, Math.max(5, Number(e.target.value) || 45)),
-                        })
-                      }
-                    />
-                  </>
-                ) : null}
-                <p className="muted" style={{ fontSize: '0.8rem', marginBottom: 0 }}>
-                  One round = everyone gets one turn. Increase for more prompts.
-                </p>
-                <label htmlFor="mlt-cat" style={{ marginTop: '0.75rem' }}>
-                  Most likely to — category (built-in prompts)
-                </label>
-                <select
-                  id="mlt-cat"
-                  value={settings.mostLikelyCategory}
-                  onChange={(e) =>
-                    updateRoomSettings({
-                      mostLikelyCategory: e.target.value as RoomSettings['mostLikelyCategory'],
-                    })
-                  }
-                >
-                  <option value="spicy">Spicy / flirty</option>
-                  <option value="dumb">Dumb / chaotic</option>
-                  <option value="college">College</option>
-                  <option value="embarrassing">Embarrassing</option>
-                </select>
-              </div>
-            ) : null}
+          {isHost ? (
+            <div className="card-panel lobby-modes">
+              <h2 className="section-title">Choose a game</h2>
+              <p className="muted lobby-modes-lead">
+                <strong className="td-highlight">Truth or Dare</strong> is one experience — pick a flow below.
+                NHIE &amp; Most Likely are separate vibes.
+              </p>
 
-            {isHost ? (
-              <div className="card-panel" style={{ marginTop: '1rem', padding: '1rem' }}>
-                <h2 style={{ marginTop: 0 }}>Game mode</h2>
-                <p className="muted" style={{ marginTop: 0 }}>
-                  Classic Truth or Dare, Never Have I Ever, or Most Likely To (plus built-in prompts). Pick
-                  &amp; write: each turn one person chooses T/D, then a random player writes the prompt.
-                </p>
-                <div className="mode-grid">
+              <div className="mode-section">
+                <p className="mode-section-label">Truth or Dare — flow</p>
+                <div className="mode-card-row">
                   <button
                     type="button"
-                    className={gameMode === 'sharedDeck' ? 'btn-primary' : 'btn-secondary'}
+                    className={`mode-card ${gameMode === 'sharedDeck' ? 'mode-card--active' : ''}`}
                     onClick={() => setGameMode('sharedDeck')}
                   >
-                    Truth or Dare deck
+                    <span className="mode-card-title">Classic deck</span>
+                    <span className="mode-card-sub">Everyone writes cards, random turns</span>
                   </button>
                   <button
                     type="button"
-                    className={gameMode === 'neverHaveIEver' ? 'btn-primary' : 'btn-secondary'}
-                    onClick={() => setGameMode('neverHaveIEver')}
-                  >
-                    Never have I ever
-                  </button>
-                  <button
-                    type="button"
-                    className={gameMode === 'mostLikelyTo' ? 'btn-primary' : 'btn-secondary'}
-                    onClick={() => setGameMode('mostLikelyTo')}
-                  >
-                    Most likely to
-                  </button>
-                  <button
-                    type="button"
-                    className={gameMode === 'pickAndWrite' ? 'btn-primary' : 'btn-secondary'}
+                    className={`mode-card ${gameMode === 'pickAndWrite' ? 'mode-card--active' : ''}`}
                     onClick={() => setGameMode('pickAndWrite')}
                   >
-                    Pick &amp; write
+                    <span className="mode-card-title">Hot seat</span>
+                    <span className="mode-card-sub">Each turn: pick T/D, someone writes the prompt</span>
                   </button>
                 </div>
               </div>
-            ) : (
-              <p className="muted" style={{ marginTop: '0.75rem' }}>
+
+              {(gameMode === 'sharedDeck' || gameMode === 'pickAndWrite') && isHost ? (
+                <div className="mode-section animate-in">
+                  <p className="mode-section-label">Truth or Dare — mix</p>
+                  <div className="td-style-grid">
+                    {(
+                      [
+                        ['truthOnly', 'Truth only', 'No dares'],
+                        ['dareOnly', 'Dare only', 'No truths'],
+                        ['mixed', 'Mixed', 'Truths & dares'],
+                      ] as const
+                    ).map(([id, title, sub]) => (
+                      <button
+                        key={id}
+                        type="button"
+                        className={`mode-card mode-card--sm ${
+                          (settings.truthDarePlayStyle ?? 'mixed') === id ? 'mode-card--active' : ''
+                        }`}
+                        onClick={() =>
+                          updateRoomSettings({ truthDarePlayStyle: id as RoomSettings['truthDarePlayStyle'] })
+                        }
+                      >
+                        <span className="mode-card-title">{title}</span>
+                        <span className="mode-card-sub">{sub}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+              <div className="mode-section">
+                <p className="mode-section-label">Other party modes</p>
+                <div className="mode-card-row mode-card-row--other">
+                  <button
+                    type="button"
+                    className={`mode-card ${gameMode === 'neverHaveIEver' ? 'mode-card--active' : ''}`}
+                    onClick={() => setGameMode('neverHaveIEver')}
+                  >
+                    <span className="mode-card-title">Never have I ever</span>
+                    <span className="mode-card-sub">Statement rounds</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`mode-card ${gameMode === 'mostLikelyTo' ? 'mode-card--active' : ''}`}
+                    onClick={() => setGameMode('mostLikelyTo')}
+                  >
+                    <span className="mode-card-title">Most likely to</span>
+                    <span className="mode-card-sub">Callouts &amp; chaos</span>
+                  </button>
+                </div>
+              </div>
+
+              {gameMode === 'mostLikelyTo' && isHost ? (
+                <div className="mode-section animate-in">
+                  <p className="mode-section-label">Most likely to — deck</p>
+                  <div className="mlt-source-grid">
+                    {(
+                      [
+                        ['builtin', 'Built-in only', 'Curated prompts'],
+                        ['custom', 'Custom only', 'Your lines'],
+                        ['mixed', 'Mix both', 'Best of both'],
+                      ] as const
+                    ).map(([id, title, sub]) => (
+                      <button
+                        key={id}
+                        type="button"
+                        className={`mode-card mode-card--sm ${
+                          (settings.mltDeckSource ?? 'mixed') === id ? 'mode-card--active' : ''
+                        }`}
+                        onClick={() => updateRoomSettings({ mltDeckSource: id as RoomSettings['mltDeckSource'] })}
+                      >
+                        <span className="mode-card-title">{title}</span>
+                        <span className="mode-card-sub">{sub}</span>
+                      </button>
+                    ))}
+                  </div>
+                  <label className="muted" htmlFor="mlt-cat-lobby" style={{ display: 'block', marginTop: '0.75rem' }}>
+                    Vibe category
+                  </label>
+                  <select
+                    id="mlt-cat-lobby"
+                    className="mlt-cat-select"
+                    value={settings.mostLikelyCategory}
+                    onChange={(e) =>
+                      updateRoomSettings({
+                        mostLikelyCategory: e.target.value as RoomSettings['mostLikelyCategory'],
+                      })
+                    }
+                  >
+                    <option value="funny">Funny</option>
+                    <option value="college">College</option>
+                    <option value="chaotic">Chaotic</option>
+                    <option value="spicy">Spicy / flirty</option>
+                  </select>
+                </div>
+              ) : null}
+            </div>
+          ) : (
+            <div className="card-panel guest-mode-hint">
+              <p className="muted" style={{ margin: 0 }}>
                 Mode:{' '}
                 <strong>
                   {gameMode === 'pickAndWrite'
-                    ? 'Pick & write'
+                    ? 'Truth or Dare — hot seat'
                     : gameMode === 'neverHaveIEver'
                       ? 'Never have I ever'
                       : gameMode === 'mostLikelyTo'
                         ? 'Most likely to'
-                        : 'Truth or Dare deck'}
+                        : 'Truth or Dare — classic deck'}
                 </strong>
               </p>
-            )}
+            </div>
+          )}
 
             {isHost ? (
               <div className="card-panel" style={{ marginTop: '1rem', padding: '1rem' }}>
@@ -957,14 +961,16 @@ export default function RoomPage() {
               ) : (
                 <button
                   type="button"
-                  className="btn-primary"
+                  className="btn-primary btn-primary-cta"
                   onClick={startWriting}
                   disabled={state.players.length < 2}
                 >
                   {gameMode === 'neverHaveIEver'
                     ? 'Start writing prompts'
                     : gameMode === 'mostLikelyTo'
-                      ? 'Start writing prompts'
+                      ? mltDeckSource === 'builtin'
+                        ? 'Start ready check'
+                        : 'Start writing prompts'
                       : 'Start writing cards'}
                 </button>
               )
@@ -976,7 +982,6 @@ export default function RoomPage() {
                 Need at least 2 players.
               </p>
             ) : null}
-          </div>
         </section>
       )}
 
@@ -986,16 +991,35 @@ export default function RoomPage() {
             {gameMode === 'neverHaveIEver'
               ? 'Write your Never have I ever… lines'
               : gameMode === 'mostLikelyTo'
-                ? 'Write your Most likely to… prompts'
+                ? mltDeckSource === 'builtin'
+                  ? 'Built-in Most likely to'
+                  : 'Write your Most likely to… prompts'
                 : 'Write your cards'}
           </h1>
           <p className="muted">
-            {gameMode === 'neverHaveIEver' || gameMode === 'mostLikelyTo' ? (
+            {gameMode === 'mostLikelyTo' && mltDeckSource === 'builtin' ? (
+              <>
+                Curated prompts from the <strong>{settings.mostLikelyCategory}</strong> pack — tap ready for everyone,
+                then the host can roll.
+              </>
+            ) : gameMode === 'neverHaveIEver' || gameMode === 'mostLikelyTo' ? (
               <>
                 {settings.truthsPerPlayer} prompts each (max {MAX_CARD_TEXT_LENGTH} chars).{' '}
-                {gameMode === 'mostLikelyTo'
-                  ? 'The deck mixes your lines with category prompts from the host.'
-                  : 'Favorites are saved on this device only.'}
+                {gameMode === 'mostLikelyTo' && mltDeckSource === 'mixed'
+                  ? 'The deck mixes your lines with built-ins from the vibe you picked.'
+                  : gameMode === 'mostLikelyTo'
+                    ? 'Only your crew’s lines go in.'
+                    : 'Favorites are saved on this device only.'}
+              </>
+            ) : truthDareStyle === 'truthOnly' ? (
+              <>
+                {settings.truthsPerPlayer} truths each — <strong>truth only</strong> (max {MAX_CARD_TEXT_LENGTH}{' '}
+                chars).
+              </>
+            ) : truthDareStyle === 'dareOnly' ? (
+              <>
+                {settings.daresPerPlayer} dares each — <strong>dare only</strong> (max {MAX_CARD_TEXT_LENGTH}{' '}
+                chars).
               </>
             ) : (
               <>
@@ -1006,6 +1030,20 @@ export default function RoomPage() {
           </p>
 
           <div className="card-panel">
+            {gameMode === 'mostLikelyTo' && mltDeckSource === 'builtin' ? (
+              <>
+                <h2>Ready check</h2>
+                <p className="muted">No typing — you’re opting into the built-in deck.</p>
+                {!state.submittedPlayerIds.includes(myId ?? '') ? (
+                  <button type="button" className="btn-primary btn-fat" onClick={submitCards}>
+                    I&apos;m ready
+                  </button>
+                ) : (
+                  <p className="muted">You&apos;re in. Nudge the host when everyone&apos;s tapped.</p>
+                )}
+              </>
+            ) : (
+              <>
             <h2>{gameMode === 'neverHaveIEver' ? 'Your statements' : gameMode === 'mostLikelyTo' ? 'Your prompts' : 'Your truths'}</h2>
             {gameMode === 'neverHaveIEver' && !state.submittedPlayerIds.includes(myId ?? '') ? (
               <div className="fav-block">
@@ -1097,6 +1135,8 @@ export default function RoomPage() {
             ) : (
               <p className="muted">You are done. Waiting for others…</p>
             )}
+              </>
+            )}
 
             <h2 style={{ marginTop: '1.25rem' }}>Status</h2>
             <ul className="player-list">
@@ -1114,7 +1154,9 @@ export default function RoomPage() {
 
             {isHost ? (
               <button type="button" className="btn-secondary" onClick={lockDeck}>
-                Start with submitted cards only
+                {gameMode === 'mostLikelyTo' && mltDeckSource === 'builtin'
+                  ? 'Start game (built-in deck)'
+                  : 'Start with submitted cards only'}
               </button>
             ) : null}
           </div>
@@ -1140,23 +1182,27 @@ export default function RoomPage() {
             turnEndsAt={state.turnEndsAt}
             totalSeconds={turnSec}
             nowTick={nowTick}
+            soundEnabled={sfxOn}
           />
           {isHost ? (
             <div className="host-play-bar">
               <button type="button" className="btn-secondary" onClick={skipRound}>
                 Skip round
               </button>
-              <button type="button" className="btn-secondary" onClick={restartGame}>
+              <button type="button" className="btn-secondary" onClick={() => restartGame()}>
                 Restart to lobby
               </button>
             </div>
           ) : null}
           <div className="card-panel card-play-surface" {...swipeHandlers}>
             <p className="prompt-text" style={{ fontSize: '1.05rem' }}>
-              <strong>{subjectName}</strong>, choose:
+              <strong>{subjectName}</strong>
+              {truthDareStyle === 'mixed' ? ', choose:' : truthDareStyle === 'truthOnly' ? ' — truth round' : ' — dare round'}
             </p>
             {isHost ? <p className="muted swipe-hint">Swipe left on card to skip (host)</p> : null}
-            {iAmSubject ? (
+            {truthDareStyle !== 'mixed' ? (
+              <p className="muted">Hang tight — locking in the round…</p>
+            ) : iAmSubject ? (
               <>
                 <button type="button" className="btn-primary" onClick={() => pickTruthOrDare('truth')}>
                   Truth
@@ -1245,13 +1291,14 @@ export default function RoomPage() {
             turnEndsAt={state.turnEndsAt}
             totalSeconds={turnSec}
             nowTick={nowTick}
+            soundEnabled={sfxOn}
           />
           {isHost ? (
             <div className="host-play-bar">
               <button type="button" className="btn-secondary" onClick={skipRound}>
                 Skip round
               </button>
-              <button type="button" className="btn-secondary" onClick={restartGame}>
+              <button type="button" className="btn-secondary" onClick={() => restartGame()}>
                 Restart to lobby
               </button>
             </div>
@@ -1342,19 +1389,30 @@ export default function RoomPage() {
       )}
 
       {state.phase === 'finished' && (
-        <section>
-          <h1>Done</h1>
-          <div className="card-panel">
-            <p>
+        <section className="finished-section animate-in">
+          <h1 className="finished-title">That&apos;s a wrap</h1>
+          <div className="card-panel finished-card">
+            <p className="finished-lead">
               {gameMode === 'pickAndWrite'
-                ? 'Everyone had their turn. Nice game!'
+                ? 'Everyone had their turn — same crew, new chaos anytime.'
                 : gameMode === 'neverHaveIEver'
-                  ? 'That’s every line — legendary.'
+                  ? 'Every line played — legendary.'
                   : gameMode === 'mostLikelyTo'
                     ? 'Deck finished — chaos contained.'
                     : 'You made it through the whole deck.'}
             </p>
-            <p className="muted">Start a new room from home to play again.</p>
+            <div className="finished-actions">
+              {isHost ? (
+                <button type="button" className="btn-primary" onClick={() => restartGame(true)}>
+                  Play again
+                </button>
+              ) : (
+                <p className="muted">Waiting for the host to restart or head home…</p>
+              )}
+              <Link to="/" className="btn-secondary btn-link-home">
+                Go home
+              </Link>
+            </div>
           </div>
         </section>
       )}
