@@ -137,6 +137,14 @@ export default function RoomPage() {
   useLobbyMusic(musicOn);
 
   useEffect(() => {
+    if (!roomCode) {
+      document.title = 'Party Games';
+      return;
+    }
+    document.title = state?.roomCode ? `Party Games · ${state.roomCode}` : 'Party Games · Room';
+  }, [roomCode, state?.roomCode]);
+
+  useEffect(() => {
     ensureConnected();
     const onConnect = () => setMyId(socket.id ?? null);
     const onDisconnect = () => setMyId(null);
@@ -781,7 +789,7 @@ export default function RoomPage() {
       <header className="lobby-topbar">
         <div className="lobby-brand">
           <span className="lobby-room-pill">
-            <span className="lobby-room-label">Room</span>
+            <span className="lobby-room-label">Party Games</span>
             <button
               type="button"
               className="room-code-btn"

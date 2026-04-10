@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useNavigate } from 'react-router-dom';
 import type { GameMode, RoomState } from '@shared';
 import { MAX_PLAYER_NAME_LENGTH, ROOM_CODE_LENGTH } from '@shared';
@@ -32,6 +33,7 @@ export default function HomePage() {
 
   useEffect(() => {
     ensureConnected();
+    document.title = 'Party Games — Play';
   }, []);
 
   const saveName = (n: string) => {
@@ -92,10 +94,10 @@ export default function HomePage() {
   return (
     <div className="home-wrap animate-in">
       <header className="home-hero">
-        <p className="home-eyebrow">Party game</p>
-        <h1 className="home-title">Truth or Dare</h1>
+        <p className="home-eyebrow">Party Games</p>
+        <h1 className="home-title">Create or join</h1>
         <p className="home-tagline">
-          One room, QR join, live lobby — Truth or Dare, Kings Cup, NHIE, and Most Likely. Built for phones.
+          One room code, QR join, live lobby — pick your mode and play together on any phone.
         </p>
       </header>
 
@@ -180,6 +182,12 @@ export default function HomePage() {
       <p className="disclaimer home-disclaimer">
         Play with people you trust. Content is visible to everyone in the room. Rooms live in server memory only
         (no accounts).
+      </p>
+
+      <p className="home-back-landing">
+        <Link to="/" className="muted home-back-link">
+          ← Party Games home
+        </Link>
       </p>
     </div>
   );
