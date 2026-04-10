@@ -104,12 +104,6 @@ export default function RoomPage() {
   const [myId, setMyId] = useState<string | null>(() =>
     socket.connected ? (socket.id ?? null) : null,
   );
-  const [origin] = useState(() =>
-    typeof globalThis !== 'undefined' && 'location' in globalThis
-      ? globalThis.location.origin
-      : '',
-  );
-
   const [joinName, setJoinName] = useState(() => sessionStorage.getItem('tod_display_name') ?? '');
   const [joinAttempted, setJoinAttempted] = useState(!!(initial?.roomCode === roomCode));
 
@@ -131,6 +125,7 @@ export default function RoomPage() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [partyMoment, setPartyMoment] = useState<PartyMomentPayload | null>(null);
   const [voteDraft, setVoteDraft] = useState('');
+  const [lobbyVoteOpen, setLobbyVoteOpen] = useState(false);
   const teamNameInputA = useRef<HTMLInputElement>(null);
   const teamNameInputB = useRef<HTMLInputElement>(null);
   const [, favBump] = useState(0);
@@ -538,7 +533,10 @@ export default function RoomPage() {
   const mltDeckSource = settings.mltDeckSource ?? 'mixed';
   const gameMode = state.gameMode ?? 'sharedDeck';
   const totalPickTurns = state.players.length * settings.pickCycles;
-  const joinUrl = origin ? `${origin}/room/${state.roomCode}` : '';
+  const joinUrl =
+    typeof globalThis !== 'undefined' && 'location' in globalThis && globalThis.location.origin
+      ? `${globalThis.location.origin}/room/${state.roomCode}`
+      : '';
   const turnSec = effectiveTurnSeconds(settings);
   const teamLabelA = state.teams.find((t) => t.id === 't1')?.name ?? 'Team A';
   const teamLabelB = state.teams.find((t) => t.id === 't2')?.name ?? 'Team B';
@@ -813,7 +811,7 @@ export default function RoomPage() {
             </ul>
           </div>
 
-          {isHost ? (
+          {isHost && settings.teamsEnabled ? (
             <TeamSetupPanel
               state={state}
               teamLabelA={teamLabelA}
@@ -839,66 +837,85 @@ export default function RoomPage() {
                   </>
                 ) : (
                   <>
-                    <strong className="td-highlight">Truth or Dare</strong> is one experience — pick a flow below.
-                    NHIE, Most Likely &amp; Kings Cup are separate vibes.
+                    <strong className="td-highlight">Truth or Dare</strong> — choose how you play and what goes in the
+                    deck. Other party modes are below.
                   </>
                 )}
               </p>
 
-              <div className="mode-section">
-                <p className="mode-section-label">Truth or Dare — flow</p>
-                <div className="mode-card-row">
-                  <button
-                    type="button"
-                    className={`mode-card ${gameMode === 'sharedDeck' ? 'mode-card--active' : ''}`}
-                    onClick={() => setGameMode('sharedDeck')}
-                  >
-                    <span className="mode-card-title">Classic deck</span>
-                    <span className="mode-card-sub">Everyone writes cards, random turns</span>
-                  </button>
-                  <button
-                    type="button"
-                    className={`mode-card ${gameMode === 'pickAndWrite' ? 'mode-card--active' : ''}`}
-                    onClick={() => setGameMode('pickAndWrite')}
-                  >
-                    <span className="mode-card-title">Hot seat</span>
-                    <span className="mode-card-sub">Each turn: pick T/D, someone writes the prompt</span>
-                  </button>
-                </div>
-              </div>
-
               {(gameMode === 'sharedDeck' || gameMode === 'pickAndWrite') && isHost ? (
-                <div className="mode-section animate-in">
-                  <p className="mode-section-label">Truth or Dare — mix</p>
-                  <div className="td-style-grid">
-                    {(
-                      [
-                        ['truthOnly', 'Truth only', 'No dares'],
-                        ['dareOnly', 'Dare only', 'No truths'],
-                        ['mixed', 'Mixed', 'Truths & dares'],
-                      ] as const
-                    ).map(([id, title, sub]) => (
+                <div className="lobby-td-block">
+                  <h3 className="lobby-td-heading">Truth or Dare</h3>
+                  <div className="mode-section">
+                    <p className="mode-section-label">How you play</p>
+                    <div className="mode-card-row">
                       <button
-                        key={id}
                         type="button"
-                        className={`mode-card mode-card--sm ${
-                          (settings.truthDarePlayStyle ?? 'mixed') === id ? 'mode-card--active' : ''
-                        }`}
-                        onClick={() =>
-                          updateRoomSettings({ truthDarePlayStyle: id as RoomSettings['truthDarePlayStyle'] })
-                        }
+                        className={`mode-card ${gameMode === 'sharedDeck' ? 'mode-card--active' : ''}`}
+                        onClick={() => setGameMode('sharedDeck')}
                       >
-                        <span className="mode-card-title">{title}</span>
-                        <span className="mode-card-sub">{sub}</span>
+                        <span className="mode-card-title">Classic</span>
+                        <span className="mode-card-sub">Shared deck, random turns</span>
                       </button>
-                    ))}
+                      <button
+                        type="button"
+                        className={`mode-card ${gameMode === 'pickAndWrite' ? 'mode-card--active' : ''}`}
+                        onClick={() => setGameMode('pickAndWrite')}
+                      >
+                        <span className="mode-card-title">Hot seat</span>
+                        <span className="mode-card-sub">Pick T/D each turn, someone writes the prompt</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="mode-section animate-in lobby-td-mix">
+                    <p className="mode-section-label">Prompt mix</p>
+                    <div className="td-style-grid">
+                      {(
+                        [
+                          ['truthOnly', 'Truth only', 'No dares'],
+                          ['dareOnly', 'Dare only', 'No truths'],
+                          ['mixed', 'Mixed', 'Truths & dares'],
+                        ] as const
+                      ).map(([id, title, sub]) => (
+                        <button
+                          key={id}
+                          type="button"
+                          className={`mode-card mode-card--sm ${
+                            (settings.truthDarePlayStyle ?? 'mixed') === id ? 'mode-card--active' : ''
+                          }`}
+                          onClick={() =>
+                            updateRoomSettings({ truthDarePlayStyle: id as RoomSettings['truthDarePlayStyle'] })
+                          }
+                        >
+                          <span className="mode-card-title">{title}</span>
+                          <span className="mode-card-sub">{sub}</span>
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 </div>
               ) : null}
 
               <div className="mode-section">
                 <p className="mode-section-label">Other party modes</p>
-                <div className="mode-card-row mode-card-row--other mode-card-row--triple">
+                <div
+                  className={`mode-card-row mode-card-row--other ${
+                    gameMode === 'sharedDeck' || gameMode === 'pickAndWrite'
+                      ? 'mode-card-row--triple'
+                      : 'mode-card-row--quad'
+                  }`}
+                >
+                  {gameMode !== 'sharedDeck' && gameMode !== 'pickAndWrite' ? (
+                    <button
+                      type="button"
+                      className="mode-card"
+                      onClick={() => setGameMode('sharedDeck')}
+                    >
+                      <span className="mode-card-title">🎭 Truth or Dare</span>
+                      <span className="mode-card-sub">Classic, hot seat &amp; mix</span>
+                    </button>
+                  ) : null}
                   <button
                     type="button"
                     className={`mode-card ${gameMode === 'neverHaveIEver' ? 'mode-card--active' : ''}`}
@@ -991,31 +1008,43 @@ export default function RoomPage() {
           )}
 
             {isHost ? (
-              <div className="card-panel" style={{ marginTop: '1rem', padding: '1rem' }}>
-                <h2 style={{ marginTop: 0 }}>Party vote</h2>
-                <p className="muted" style={{ marginTop: 0 }}>
-                  Quick poll — secret ballots, host reveals when ready.
-                </p>
-                <label htmlFor="vote-q">Question</label>
-                <textarea
-                  id="vote-q"
-                  value={voteDraft}
-                  onChange={(e) => setVoteDraft(e.target.value)}
-                  placeholder="Who had the worst dare?"
-                  maxLength={200}
-                  rows={2}
-                />
-                <button type="button" className="btn-secondary" onClick={() => startHostVote('players')}>
-                  Start player vote
-                </button>
+              <div className="card-panel lobby-vote-collapsed" style={{ marginTop: '1rem', padding: '1rem' }}>
                 <button
                   type="button"
-                  className="btn-secondary"
-                  disabled={!settings.teamsEnabled}
-                  onClick={() => startHostVote('teams')}
+                  className="btn-secondary lobby-vote-toggle"
+                  aria-expanded={lobbyVoteOpen}
+                  onClick={() => setLobbyVoteOpen((o) => !o)}
                 >
-                  Start team vote
+                  {lobbyVoteOpen ? '▼ Party vote' : '▶ Party vote'}
                 </button>
+                {lobbyVoteOpen ? (
+                  <div className="lobby-vote-panel animate-in">
+                    <h2 className="lobby-vote-title">Party vote</h2>
+                    <p className="muted" style={{ marginTop: 0 }}>
+                      Quick poll — secret ballots, host reveals when ready.
+                    </p>
+                    <label htmlFor="vote-q">Question</label>
+                    <textarea
+                      id="vote-q"
+                      value={voteDraft}
+                      onChange={(e) => setVoteDraft(e.target.value)}
+                      placeholder="Who had the worst dare?"
+                      maxLength={200}
+                      rows={2}
+                    />
+                    <button type="button" className="btn-secondary" onClick={() => startHostVote('players')}>
+                      Start player vote
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      disabled={!settings.teamsEnabled}
+                      onClick={() => startHostVote('teams')}
+                    >
+                      Start team vote
+                    </button>
+                  </div>
+                ) : null}
               </div>
             ) : null}
 

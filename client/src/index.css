@@ -303,6 +303,13 @@ button:active:not(:disabled) {
   border-radius: 0.75rem;
 }
 
+.qr-box svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-width: 100%;
+}
+
 .qr-copy {
   flex: 1;
   min-width: 0;
@@ -1273,6 +1280,10 @@ body.party-shake {
   grid-template-columns: repeat(3, 1fr);
 }
 
+.mode-card-row--quad {
+  grid-template-columns: repeat(2, 1fr);
+}
+
 .mode-card {
   display: flex;
   flex-direction: column;
@@ -1339,6 +1350,10 @@ body.party-shake {
   .mode-card-row--triple {
     grid-template-columns: 1fr;
   }
+
+  .mode-card-row--quad {
+    grid-template-columns: 1fr;
+  }
 }
 
 .mlt-cat-select {
@@ -1348,6 +1363,36 @@ body.party-shake {
 
 .guest-mode-hint {
   margin-top: 0.75rem;
+}
+
+.lobby-td-block {
+  margin-bottom: 1.25rem;
+  padding: 1rem 1.1rem;
+  border-radius: 1rem;
+  border: 1px solid rgba(196, 168, 255, 0.22);
+  background: rgba(26, 18, 40, 0.45);
+}
+
+.lobby-td-heading {
+  margin: 0 0 0.85rem;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #f4f0ff;
+}
+
+.lobby-vote-toggle {
+  width: 100%;
+  justify-content: center;
+  margin: 0;
+}
+
+.lobby-vote-panel {
+  margin-top: 1rem;
+}
+
+.lobby-vote-title {
+  margin: 0 0 0.5rem;
+  font-size: 1.1rem;
 }
 
 /* Team setup */

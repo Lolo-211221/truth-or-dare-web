@@ -14,7 +14,7 @@ const HOME_GAME_OPTIONS: {
   title: string;
   sub: string;
 }[] = [
-  { mode: 'sharedDeck', emoji: '🎭', title: 'Truth or Dare', sub: 'Classic deck — everyone writes, random turns' },
+  { mode: 'sharedDeck', emoji: '🎭', title: 'Truth or Dare', sub: 'Prompts and turns — pick style in the lobby' },
   { mode: 'kingsCup', emoji: '🃏', title: 'Kings Cup', sub: '52 cards + secret X — rules on every draw' },
   { mode: 'neverHaveIEver', emoji: '👆', title: 'Never Have I Ever', sub: 'Statement rounds' },
   { mode: 'mostLikelyTo', emoji: '🗳️', title: 'Most Likely To', sub: 'Callouts & chaos' },
