@@ -1762,6 +1762,14 @@ body.party-shake {
   margin: 0.5rem 0 1rem;
 }
 
+.kc-drive-rule {
+  margin: 0 0 1rem;
+  font-size: 0.95rem;
+  line-height: 1.45;
+  color: #d4c4f0;
+  text-align: left;
+}
+
 .btn-heaven {
   min-height: 3.5rem;
   min-width: 12rem;

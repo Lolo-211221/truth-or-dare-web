@@ -593,70 +593,22 @@ function resolveHeavenMinigame(ioSrv: Server, room: InternalRoom) {
   }
 }
 
-function resolveDriveStep(ioSrv: Server, room: InternalRoom, code: string) {
+/** Drive (5): in-person challenge — drawer taps Done when ready; no tap race. */
+function finishDriveRound(ioSrv: Server, room: InternalRoom) {
   const k = room.kingsCup;
   if (!k || k.uiStep !== 'drive') return;
-  const order = room.playerOrder;
-  const n = order.length;
-  let loser: string | null = null;
-  if (k.driveTaps.size === 0) {
-    loser = k.drawerId ?? null;
-  } else {
-    for (const id of order) {
-      if (!k.driveTaps.has(id)) {
-        loser = id;
-        break;
-      }
-    }
-    if (!loser) {
-      let maxT = -1;
-      for (const id of order) {
-        const t = k.driveTaps.get(id);
-        if (t != null && t >= maxT) {
-          maxT = t;
-          loser = id;
-        }
-      }
-    }
+  if (k.driveTimer) {
+    clearTimeout(k.driveTimer);
+    k.driveTimer = null;
   }
-  k.lastPenaltyPlayerId = loser;
+  k.driveEndsAt = null;
   k.driveTaps.clear();
-  k.driveStep += 1;
-  if (k.driveStep >= 3) {
-    k.driveEndsAt = null;
-    if (k.driveTimer) {
-      clearTimeout(k.driveTimer);
-      k.driveTimer = null;
-    }
-    const wasLast = k.remaining.length === 0;
-    advanceKingsTurn(k, order.length);
-    if (wasLast) {
-      finishKingsCupGame(ioSrv, room);
-    } else {
-      emitRoomState(ioSrv, room);
-    }
-    return;
-  }
-  k.driveEndsAt = Date.now() + 8000;
-  if (k.driveTimer) clearTimeout(k.driveTimer);
-  k.driveTimer = setTimeout(() => {
-    const r = rooms.get(code);
-    if (!r?.kingsCup || r.kingsCup.uiStep !== 'drive') return;
-    resolveDriveStep(ioSrv, r, code);
-  }, 8100);
-  emitRoomState(ioSrv, room);
-}
-
-function tryResolveDriveEarly(ioSrv: Server, room: InternalRoom, code: string) {
-  const k = room.kingsCup;
-  if (!k || k.uiStep !== 'drive') return;
-  if (k.driveTaps.size >= room.playerOrder.length) {
-    if (k.driveTimer) {
-      clearTimeout(k.driveTimer);
-      k.driveTimer = null;
-    }
-    resolveDriveStep(ioSrv, room, code);
-  }
+  k.lastPenaltyPlayerId = null;
+  const order = room.playerOrder;
+  const wasLast = k.remaining.length === 0;
+  advanceKingsTurn(k, order.length);
+  if (wasLast) finishKingsCupGame(ioSrv, room);
+  else emitRoomState(ioSrv, room);
 }
 
 function applyKingsCardAck(ioSrv: Server, room: InternalRoom, code: string) {
@@ -680,13 +632,11 @@ function applyKingsCardAck(ioSrv: Server, room: InternalRoom, code: string) {
     k.uiStep = 'drive';
     k.driveStep = 0;
     k.driveTaps.clear();
-    k.driveEndsAt = Date.now() + 8000;
-    if (k.driveTimer) clearTimeout(k.driveTimer);
-    k.driveTimer = setTimeout(() => {
-      const r = rooms.get(code);
-      if (!r?.kingsCup || r.kingsCup.uiStep !== 'drive') return;
-      resolveDriveStep(ioSrv, r, code);
-    }, 8100);
+    k.driveEndsAt = null;
+    if (k.driveTimer) {
+      clearTimeout(k.driveTimer);
+      k.driveTimer = null;
+    }
     emitRoomState(ioSrv, room);
     return;
   }
@@ -2001,7 +1951,7 @@ io.on('connection', (socket) => {
     emitRoomState(io, room);
   });
 
-  socket.on('kings_drive_tap', (_payload, ack) => {
+  socket.on('kings_drive_done', (_payload, ack) => {
     const code = socketRoom.get(socket.id);
     if (!code) {
       ack?.({ ok: false, error: 'Not in a room.' });
@@ -2009,14 +1959,16 @@ io.on('connection', (socket) => {
     }
     const room = rooms.get(code);
     const k = room?.kingsCup;
-    if (!k || k.uiStep !== 'drive') {
+    if (!room || !k || k.uiStep !== 'drive') {
       ack?.({ ok: false, error: 'Not in drive round.' });
       return;
     }
-    k.driveTaps.set(socket.id, Date.now());
-    tryResolveDriveEarly(io, room, code);
+    if (socket.id !== k.drawerId) {
+      ack?.({ ok: false, error: 'Only the drawer can continue.' });
+      return;
+    }
+    finishDriveRound(io, room);
     ack?.({ ok: true });
-    emitRoomState(io, room);
   });
 
   socket.on('kings_pick_player', (payload: { targetId: string }, ack) => {
@@ -2038,6 +1990,10 @@ io.on('connection', (socket) => {
     const targetId = payload?.targetId;
     if (!targetId || !room.players.has(targetId)) {
       ack?.({ ok: false, error: 'Pick a player in the room.' });
+      return;
+    }
+    if (k.pickKind === '8' && targetId === k.drawerId) {
+      ack?.({ ok: false, error: 'Pick someone else as your mate.' });
       return;
     }
     if (k.pickKind === '2') k.lastPenaltyPlayerId = targetId;

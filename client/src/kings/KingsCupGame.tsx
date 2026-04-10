@@ -44,12 +44,12 @@ export function KingsCupGame({ state, myId, sfxOn }: Props) {
   const drawCard = () => socket.emit('kings_draw', {});
   const ackReveal = () => socket.emit('kings_ack_reveal', {});
   const heavenTap = () => socket.emit('kings_heaven_tap', {});
-  const driveTap = () => socket.emit('kings_drive_tap', {});
+  const driveDone = () => socket.emit('kings_drive_done', {});
   const pickPlayer = (targetId: string) => socket.emit('kings_pick_player', { targetId });
   const submitRule = () => socket.emit('kings_submit_king_rule', { text: kingDraft });
 
-  const driveLabels = ['👍 Thumbs up', '🚗 Vroom', '💃 Skirt'];
   const isMyTurn = myId === kc.currentTurnPlayerId && kc.uiStep === 'waitingDraw';
+  const driveCopy = kingsCupRule('5', false);
 
   return (
     <section className="kc-root">
@@ -157,11 +157,15 @@ export function KingsCupGame({ state, myId, sfxOn }: Props) {
 
       {kc.uiStep === 'drive' ? (
         <div className="kc-minigame kc-minigame--drive">
-          <p className="kc-mg-title">🚗 Drive — step {kc.driveStep + 1}/3</p>
-          <p className="kc-drive-step">{driveLabels[kc.driveStep] ?? ''}</p>
-          <button type="button" className="btn-primary btn-primary-cta" onClick={driveTap}>
-            I did it — tap
-          </button>
+          <p className="kc-mg-title">🚗 {driveCopy.title}</p>
+          <p className="kc-drive-rule">{driveCopy.rule}</p>
+          {myId === kc.drawerId ? (
+            <button type="button" className="btn-primary btn-primary-cta" onClick={driveDone}>
+              Done
+            </button>
+          ) : (
+            <p className="muted">{drawerName} is leading this round…</p>
+          )}
         </div>
       ) : null}
 
@@ -173,7 +177,7 @@ export function KingsCupGame({ state, myId, sfxOn }: Props) {
           {myId === kc.drawerId ? (
             <div className="kc-pick-grid">
               {state.players
-                .filter((p) => (kc.pickPlayerFor === '8' ? true : p.id !== myId))
+                .filter((p) => p.id !== myId)
                 .map((p) => (
                   <button key={p.id} type="button" className="btn-secondary kc-pick-btn" onClick={() => pickPlayer(p.id)}>
                     {p.name}
