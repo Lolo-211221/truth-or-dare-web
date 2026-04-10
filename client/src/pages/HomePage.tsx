@@ -16,6 +16,8 @@ const HOME_GAME_OPTIONS: {
 }[] = [
   { mode: 'sharedDeck', emoji: '🎭', title: 'Truth or Dare', sub: 'Prompts and turns — pick style in the lobby' },
   { mode: 'kingsCup', emoji: '🃏', title: 'Kings Cup', sub: '52 cards + secret X — rules on every draw' },
+  { mode: 'rideTheBus', emoji: '🚌', title: 'Ride the Bus', sub: 'Four-card guesses — hot seat ladder' },
+  { mode: 'twoTruthsLie', emoji: '🤥', title: 'Two Truths & a Lie', sub: 'Private prompts, group vote' },
   { mode: 'neverHaveIEver', emoji: '👆', title: 'Never Have I Ever', sub: 'Statement rounds' },
   { mode: 'mostLikelyTo', emoji: '🗳️', title: 'Most Likely To', sub: 'Callouts & chaos' },
 ];

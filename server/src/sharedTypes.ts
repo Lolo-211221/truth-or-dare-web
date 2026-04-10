@@ -3,7 +3,9 @@ export type GameMode =
   | 'pickAndWrite'
   | 'neverHaveIEver'
   | 'mostLikelyTo'
-  | 'kingsCup';
+  | 'kingsCup'
+  | 'rideTheBus'
+  | 'twoTruthsLie';
 
 export type TruthDarePlayStyle = 'truthOnly' | 'dareOnly' | 'mixed';
 
@@ -18,6 +20,8 @@ export type Phase =
   | 'authorPrompt'
   | 'revealTurn'
   | 'kingsCup'
+  | 'rideTheBus'
+  | 'twoTruthsLie'
   | 'finished';
 
 export type CardKind = 'truth' | 'dare' | 'nhie' | 'mlt';
@@ -93,6 +97,44 @@ export interface KingsCupState {
   lastPenaltyPlayerId: string | null;
 }
 
+export type RideTheBusUiStep = 'awaitFlip' | 'awaitGuess' | 'wrong' | 'roundWin';
+
+export interface RideTheBusCardFace {
+  rank: string;
+  suit: string;
+}
+
+export interface RideTheBusState {
+  hotSeatPlayerId: string;
+  completedPlayerIds: string[];
+  questionIndex: number;
+  currentQuestion1Based: number;
+  cardsThisRound: RideTheBusCardFace[];
+  faceUpCard: RideTheBusCardFace | null;
+  uiStep: RideTheBusUiStep;
+  cardsRemaining: number;
+  wrongMessage: string | null;
+  totalPlayers: number;
+  lastRoundSurvivorId: string | null;
+}
+
+export type TwoTruthsLieUiStep = 'entering' | 'voting' | 'reveal';
+
+export interface TwoTruthsLieState {
+  hotSeatPlayerId: string;
+  roundNumber: number;
+  totalRounds: number;
+  uiStep: TwoTruthsLieUiStep;
+  statements: [string, string, string] | null;
+  lieIndex: number | null;
+  votesReceived: number;
+  votesExpected: number;
+  drinkers: string[];
+  wrongGuessers: string[];
+  allVotersCorrect: boolean;
+  youVoted: boolean;
+}
+
 export interface PartyMomentPayload {
   id: string;
   category: ReactionCategory;
@@ -146,6 +188,8 @@ export interface RoomState {
   voteSession: VoteSessionState | null;
   deckRecentIndices: number[];
   kingsCup: KingsCupState | null;
+  rideTheBus: RideTheBusState | null;
+  twoTruthsLie: TwoTruthsLieState | null;
 }
 
 export const MAX_CARD_TEXT_LENGTH = 200;

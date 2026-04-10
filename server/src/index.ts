@@ -32,6 +32,26 @@ import {
   type KingsCupInternal,
 } from './kingsCup.js';
 import {
+  initRideTheBus,
+  rtbAckRoundWin,
+  rtbAckWrong,
+  rtbApplyCorrect,
+  rtbApplyWrong,
+  rtbCompleteRound,
+  rtbEvaluateGuess,
+  rtbFlip,
+  rtbToPublic,
+  type RideTheBusInternal,
+  type RtbGuess,
+} from './rideTheBus.js';
+import {
+  initTwoTruthsLie,
+  ttlAdvanceHotSeat,
+  ttlComputeReveal,
+  ttlToPublic,
+  type TwoTruthsLieInternal,
+} from './twoTruthsLie.js';
+import {
   MAX_CARD_TEXT_LENGTH,
   MAX_PLAYERS_PER_ROOM,
   MAX_PLAYER_NAME_LENGTH,
@@ -370,6 +390,8 @@ interface InternalRoom {
   deckRecentTexts: string[];
 
   kingsCup: KingsCupInternal | null;
+  rideTheBus: RideTheBusInternal | null;
+  twoTruthsLie: TwoTruthsLieInternal | null;
 }
 
 const rooms = new Map<string, InternalRoom>();
@@ -487,6 +509,10 @@ function toRoomState(room: InternalRoom, forSocketId?: string): RoomState {
   let active: string | null = null;
   if (room.phase === 'kingsCup' && room.kingsCup) {
     active = currentKingsTurnPlayerId(room.playerOrder, room.kingsCup.turnIndex);
+  } else if (room.phase === 'rideTheBus' && room.rideTheBus) {
+    active = room.rideTheBus.hotSeatPlayerId;
+  } else if (room.phase === 'twoTruthsLie' && room.twoTruthsLie) {
+    active = room.twoTruthsLie.hotSeatPlayerId;
   } else if (room.phase === 'turn') {
     active = activePlayerIdDeck(room);
   } else if (room.phase === 'revealTurn') {
@@ -523,6 +549,8 @@ function toRoomState(room: InternalRoom, forSocketId?: string): RoomState {
     voteSession: voteSessionToPublic(room, forSocketId),
     deckRecentIndices: [...room.deckRecentIndices],
     kingsCup: kcToPublic(room),
+    rideTheBus: room.rideTheBus ? rtbToPublic(room.rideTheBus, room.playerOrder) : null,
+    twoTruthsLie: room.twoTruthsLie ? ttlToPublic(room.twoTruthsLie, room.playerOrder, forSocketId) : null,
   };
 }
 
@@ -539,7 +567,9 @@ function parseInitialGameMode(raw: unknown): GameMode {
     m === 'pickAndWrite' ||
     m === 'neverHaveIEver' ||
     m === 'mostLikelyTo' ||
-    m === 'kingsCup'
+    m === 'kingsCup' ||
+    m === 'rideTheBus' ||
+    m === 'twoTruthsLie'
   ) {
     return m;
   }
@@ -549,6 +579,18 @@ function parseInitialGameMode(raw: unknown): GameMode {
 function finishKingsCupGame(ioSrv: Server, room: InternalRoom) {
   if (room.kingsCup) clearKingsCupTimers(room.kingsCup);
   room.kingsCup = null;
+  room.phase = 'finished';
+  emitRoomState(ioSrv, room);
+}
+
+function finishRideTheBusGame(ioSrv: Server, room: InternalRoom) {
+  room.rideTheBus = null;
+  room.phase = 'finished';
+  emitRoomState(ioSrv, room);
+}
+
+function finishTwoTruthsLieGame(ioSrv: Server, room: InternalRoom) {
+  room.twoTruthsLie = null;
   room.phase = 'finished';
   emitRoomState(ioSrv, room);
 }
@@ -1228,6 +1270,8 @@ io.on('connection', (socket) => {
       deckRecentIndices: [],
       deckRecentTexts: [],
       kingsCup: null,
+      rideTheBus: null,
+      twoTruthsLie: null,
     };
     rooms.set(code, room);
     socket.join(code);
@@ -1263,9 +1307,17 @@ io.on('connection', (socket) => {
       return;
     }
     if (
-      ['shuffling', 'turn', 'finished', 'pickType', 'authorPrompt', 'revealTurn', 'kingsCup'].includes(
-        room.phase,
-      )
+      [
+        'shuffling',
+        'turn',
+        'finished',
+        'pickType',
+        'authorPrompt',
+        'revealTurn',
+        'kingsCup',
+        'rideTheBus',
+        'twoTruthsLie',
+      ].includes(room.phase)
     ) {
       ack?.({ ok: false, error: 'This game already started. Ask for a new room.' });
       return;
@@ -1352,7 +1404,9 @@ io.on('connection', (socket) => {
       m !== 'pickAndWrite' &&
       m !== 'neverHaveIEver' &&
       m !== 'mostLikelyTo' &&
-      m !== 'kingsCup'
+      m !== 'kingsCup' &&
+      m !== 'rideTheBus' &&
+      m !== 'twoTruthsLie'
     ) {
       ack?.({ ok: false, error: 'Invalid game mode.' });
       return;
@@ -1845,6 +1899,8 @@ io.on('connection', (socket) => {
     }
     if (room.kingsCup) clearKingsCupTimers(room.kingsCup);
     room.kingsCup = null;
+    room.rideTheBus = null;
+    room.twoTruthsLie = null;
     ack?.({ ok: true });
     emitRoomState(io, room);
   });
@@ -2033,6 +2089,321 @@ io.on('connection', (socket) => {
     advanceKingsTurn(k, room.playerOrder.length);
     if (wasLast) finishKingsCupGame(io, room);
     else emitRoomState(io, room);
+    ack?.({ ok: true });
+  });
+
+  socket.on('start_ride_the_bus', (payload: { hostToken: string }, ack) => {
+    const code = socketRoom.get(socket.id);
+    if (!code) {
+      ack?.({ ok: false, error: 'Not in a room.' });
+      return;
+    }
+    const room = rooms.get(code);
+    if (!room || room.hostSocketId !== socket.id || payload?.hostToken !== room.hostToken) {
+      ack?.({ ok: false, error: 'Only the host can start.' });
+      return;
+    }
+    if (room.phase !== 'lobby') {
+      ack?.({ ok: false, error: 'Already started.' });
+      return;
+    }
+    if (room.gameMode !== 'rideTheBus') {
+      ack?.({ ok: false, error: 'Room is not Ride the Bus mode.' });
+      return;
+    }
+    if (room.players.size < 2) {
+      ack?.({ ok: false, error: 'Need at least 2 players.' });
+      return;
+    }
+    const rtb = initRideTheBus(room.playerOrder);
+    if (!rtb) {
+      ack?.({ ok: false, error: 'Could not start.' });
+      return;
+    }
+    room.rideTheBus = rtb;
+    room.phase = 'rideTheBus';
+    ack?.({ ok: true });
+    emitRoomState(io, room);
+  });
+
+  socket.on('rtb_flip', (_payload, ack) => {
+    const code = socketRoom.get(socket.id);
+    if (!code) {
+      ack?.({ ok: false, error: 'Not in a room.' });
+      return;
+    }
+    const room = rooms.get(code);
+    const r = room?.rideTheBus;
+    if (!room || room.phase !== 'rideTheBus' || !r) {
+      ack?.({ ok: false, error: 'Not in Ride the Bus.' });
+      return;
+    }
+    if (socket.id !== r.hotSeatPlayerId) {
+      ack?.({ ok: false, error: 'Only the hot seat player can flip.' });
+      return;
+    }
+    const res = rtbFlip(r);
+    if (!res.ok) {
+      ack?.({ ok: false, error: res.error });
+      return;
+    }
+    ack?.({ ok: true });
+    emitRoomState(io, room);
+  });
+
+  function parseRtbGuess(raw: unknown): RtbGuess | null {
+    if (!raw || typeof raw !== 'object') return null;
+    const o = raw as Record<string, unknown>;
+    const kind = o.kind;
+    if (kind === 'color' && (o.color === 'red' || o.color === 'black')) {
+      return { kind: 'color', color: o.color };
+    }
+    if (kind === 'hilo' && (o.hilo === 'higher' || o.hilo === 'lower' || o.hilo === 'same')) {
+      return { kind: 'hilo', hilo: o.hilo };
+    }
+    if (kind === 'inout' && (o.inout === 'inside' || o.inout === 'outside')) {
+      return { kind: 'inout', inout: o.inout };
+    }
+    if (
+      kind === 'suit' &&
+      (o.suit === '♥' || o.suit === '♦' || o.suit === '♣' || o.suit === '♠')
+    ) {
+      return { kind: 'suit', suit: o.suit };
+    }
+    return null;
+  }
+
+  socket.on('rtb_guess', (payload: unknown, ack) => {
+    const code = socketRoom.get(socket.id);
+    if (!code) {
+      ack?.({ ok: false, error: 'Not in a room.' });
+      return;
+    }
+    const room = rooms.get(code);
+    const r = room?.rideTheBus;
+    if (!room || room.phase !== 'rideTheBus' || !r) {
+      ack?.({ ok: false, error: 'Not in Ride the Bus.' });
+      return;
+    }
+    if (socket.id !== r.hotSeatPlayerId) {
+      ack?.({ ok: false, error: 'Only the hot seat player answers.' });
+      return;
+    }
+    const guess = parseRtbGuess(payload);
+    if (!guess) {
+      ack?.({ ok: false, error: 'Invalid guess.' });
+      return;
+    }
+    const ev = rtbEvaluateGuess(r, guess);
+    if (!ev.ok) {
+      ack?.({ ok: false, error: ev.error });
+      return;
+    }
+    if (!ev.correct) {
+      rtbApplyWrong(r);
+      ack?.({ ok: true });
+      emitRoomState(io, room);
+      return;
+    }
+    const next = rtbApplyCorrect(r, room.playerOrder);
+    if (next === 'roundComplete') {
+      const out = rtbCompleteRound(r, room.playerOrder);
+      if (out === 'gameComplete') {
+        finishRideTheBusGame(io, room);
+      } else {
+        emitRoomState(io, room);
+      }
+    } else {
+      emitRoomState(io, room);
+    }
+    ack?.({ ok: true });
+  });
+
+  socket.on('rtb_ack_wrong', (_payload, ack) => {
+    const code = socketRoom.get(socket.id);
+    if (!code) {
+      ack?.({ ok: false, error: 'Not in a room.' });
+      return;
+    }
+    const room = rooms.get(code);
+    const r = room?.rideTheBus;
+    if (!room || room.phase !== 'rideTheBus' || !r) {
+      ack?.({ ok: false, error: 'Not in Ride the Bus.' });
+      return;
+    }
+    if (socket.id !== r.hotSeatPlayerId) {
+      ack?.({ ok: false, error: 'Only the hot seat player can continue.' });
+      return;
+    }
+    rtbAckWrong(r);
+    ack?.({ ok: true });
+    emitRoomState(io, room);
+  });
+
+  socket.on('rtb_ack_round_win', (_payload, ack) => {
+    const code = socketRoom.get(socket.id);
+    if (!code) {
+      ack?.({ ok: false, error: 'Not in a room.' });
+      return;
+    }
+    const room = rooms.get(code);
+    const r = room?.rideTheBus;
+    if (!room || room.phase !== 'rideTheBus' || !r) {
+      ack?.({ ok: false, error: 'Not in Ride the Bus.' });
+      return;
+    }
+    rtbAckRoundWin(r);
+    ack?.({ ok: true });
+    emitRoomState(io, room);
+  });
+
+  socket.on('start_two_truths_lie', (payload: { hostToken: string }, ack) => {
+    const code = socketRoom.get(socket.id);
+    if (!code) {
+      ack?.({ ok: false, error: 'Not in a room.' });
+      return;
+    }
+    const room = rooms.get(code);
+    if (!room || room.hostSocketId !== socket.id || payload?.hostToken !== room.hostToken) {
+      ack?.({ ok: false, error: 'Only the host can start.' });
+      return;
+    }
+    if (room.phase !== 'lobby') {
+      ack?.({ ok: false, error: 'Already started.' });
+      return;
+    }
+    if (room.gameMode !== 'twoTruthsLie') {
+      ack?.({ ok: false, error: 'Room is not Two Truths & a Lie mode.' });
+      return;
+    }
+    if (room.players.size < 2) {
+      ack?.({ ok: false, error: 'Need at least 2 players.' });
+      return;
+    }
+    const ttl = initTwoTruthsLie(room.playerOrder);
+    if (!ttl) {
+      ack?.({ ok: false, error: 'Could not start.' });
+      return;
+    }
+    room.twoTruthsLie = ttl;
+    room.phase = 'twoTruthsLie';
+    ack?.({ ok: true });
+    emitRoomState(io, room);
+  });
+
+  socket.on(
+    'ttl_submit_statements',
+    (payload: { statements: [string, string, string]; lieIndex: number }, ack) => {
+      const code = socketRoom.get(socket.id);
+      if (!code) {
+        ack?.({ ok: false, error: 'Not in a room.' });
+        return;
+      }
+      const room = rooms.get(code);
+      const ttl = room?.twoTruthsLie;
+      if (!room || room.phase !== 'twoTruthsLie' || !ttl) {
+        ack?.({ ok: false, error: 'Not in game.' });
+        return;
+      }
+      if (socket.id !== ttl.hotSeatPlayerId) {
+        ack?.({ ok: false, error: 'Only the hot seat can submit.' });
+        return;
+      }
+      if (ttl.step !== 'entering') {
+        ack?.({ ok: false, error: 'Already submitted.' });
+        return;
+      }
+      const raw = payload?.statements;
+      if (!Array.isArray(raw) || raw.length !== 3) {
+        ack?.({ ok: false, error: 'Need three statements.' });
+        return;
+      }
+      const statements: [string, string, string] = [
+        String(raw[0] ?? '')
+          .trim()
+          .slice(0, MAX_CARD_TEXT_LENGTH),
+        String(raw[1] ?? '')
+          .trim()
+          .slice(0, MAX_CARD_TEXT_LENGTH),
+        String(raw[2] ?? '')
+          .trim()
+          .slice(0, MAX_CARD_TEXT_LENGTH),
+      ];
+      if (!statements[0] || !statements[1] || !statements[2]) {
+        ack?.({ ok: false, error: 'Fill all three statements.' });
+        return;
+      }
+      const lieIndex = payload?.lieIndex;
+      if (lieIndex !== 0 && lieIndex !== 1 && lieIndex !== 2) {
+        ack?.({ ok: false, error: 'Pick which is the lie.' });
+        return;
+      }
+      ttl.statements = statements;
+      ttl.lieIndex = lieIndex;
+      ttl.step = 'voting';
+      ack?.({ ok: true });
+      emitRoomState(io, room);
+    },
+  );
+
+  socket.on('ttl_vote', (payload: { choice: number }, ack) => {
+    const code = socketRoom.get(socket.id);
+    if (!code) {
+      ack?.({ ok: false, error: 'Not in a room.' });
+      return;
+    }
+    const room = rooms.get(code);
+    const ttl = room?.twoTruthsLie;
+    if (!room || room.phase !== 'twoTruthsLie' || !ttl) {
+      ack?.({ ok: false, error: 'Not in game.' });
+      return;
+    }
+    if (ttl.step !== 'voting') {
+      ack?.({ ok: false, error: 'Not voting now.' });
+      return;
+    }
+    if (socket.id === ttl.hotSeatPlayerId) {
+      ack?.({ ok: false, error: 'Hot seat does not vote.' });
+      return;
+    }
+    const choice = payload?.choice;
+    if (choice !== 0 && choice !== 1 && choice !== 2) {
+      ack?.({ ok: false, error: 'Pick 1, 2, or 3.' });
+      return;
+    }
+    ttl.votes.set(socket.id, choice);
+    const voters = room.playerOrder.filter((id) => id !== ttl.hotSeatPlayerId);
+    if (ttl.votes.size >= voters.length) {
+      ttl.step = 'reveal';
+      ttlComputeReveal(ttl, room.playerOrder);
+    }
+    ack?.({ ok: true });
+    emitRoomState(io, room);
+  });
+
+  socket.on('ttl_ack_reveal', (_payload, ack) => {
+    const code = socketRoom.get(socket.id);
+    if (!code) {
+      ack?.({ ok: false, error: 'Not in a room.' });
+      return;
+    }
+    const room = rooms.get(code);
+    const ttl = room?.twoTruthsLie;
+    if (!room || room.phase !== 'twoTruthsLie' || !ttl) {
+      ack?.({ ok: false, error: 'Not in game.' });
+      return;
+    }
+    if (ttl.step !== 'reveal') {
+      ack?.({ ok: false, error: 'Nothing to acknowledge.' });
+      return;
+    }
+    const next = ttlAdvanceHotSeat(ttl, room.playerOrder);
+    if (next === 'done') {
+      finishTwoTruthsLieGame(io, room);
+      ack?.({ ok: true });
+      return;
+    }
+    emitRoomState(io, room);
     ack?.({ ok: true });
   });
 

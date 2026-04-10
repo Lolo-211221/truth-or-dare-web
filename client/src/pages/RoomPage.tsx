@@ -17,6 +17,8 @@ import { useLobbyMusic } from '../useLobbyMusic';
 import { LobbySettingsContent } from '../lobby/LobbySettingsContent';
 import { TeamSetupPanel } from '../lobby/TeamSetupPanel';
 import { KingsCupGame } from '../kings/KingsCupGame';
+import { RideTheBusGame } from '../ride/RideTheBusGame';
+import { TwoTruthsLieGame } from '../twoTruths/TwoTruthsLieGame';
 
 function ensureConnected() {
   if (!socket.connected) socket.connect();
@@ -47,6 +49,8 @@ function normalizeRoomState(s: RoomState): RoomState {
     voteSession: s.voteSession ?? null,
     deckRecentIndices: Array.isArray(s.deckRecentIndices) ? s.deckRecentIndices : [],
     kingsCup: s.kingsCup ?? null,
+    rideTheBus: s.rideTheBus ?? null,
+    twoTruthsLie: s.twoTruthsLie ?? null,
     gameMode: (s.gameMode ?? 'sharedDeck') as GameMode,
     phase: s.phase ?? 'lobby',
     currentCardIndex: typeof s.currentCardIndex === 'number' ? s.currentCardIndex : 0,
@@ -403,6 +407,20 @@ export default function RoomPage() {
     });
   };
 
+  const startRideTheBus = () => {
+    setActionError('');
+    socket.emit('start_ride_the_bus', { hostToken }, (res: { ok: boolean; error?: string }) => {
+      if (!res?.ok) setActionError(res?.error ?? 'Could not start Ride the Bus.');
+    });
+  };
+
+  const startTwoTruthsLie = () => {
+    setActionError('');
+    socket.emit('start_two_truths_lie', { hostToken }, (res: { ok: boolean; error?: string }) => {
+      if (!res?.ok) setActionError(res?.error ?? 'Could not start Two Truths & a Lie.');
+    });
+  };
+
   const pushTeamNames = () => {
     setActionError('');
     const nameA = teamNameInputA.current?.value?.trim() || 'Team A';
@@ -595,6 +613,92 @@ export default function RoomPage() {
           </div>
         </header>
         <KingsCupGame state={state} myId={myId} sfxOn={sfxOn} />
+        {actionError ? <p className="error">{actionError}</p> : null}
+        <p style={{ marginTop: '1.5rem' }}>
+          <Link to="/">Home</Link>
+        </p>
+        <p className="disclaimer">
+          Drink responsibly. This game references drinking as a social prompt only.
+        </p>
+      </>
+    );
+  }
+
+  if (state.phase === 'rideTheBus' && state.rideTheBus) {
+    return (
+      <>
+        {toast ? (
+          <div className="card-panel" style={{ borderColor: 'rgba(252,165,165,0.4)' }}>
+            {toast}
+          </div>
+        ) : null}
+        {partyMoment ? (
+          <PartyMomentOverlay
+            moment={partyMoment}
+            onClose={() => setPartyMoment(null)}
+            soundEnabled={sfxOn}
+          />
+        ) : null}
+        <header className="lobby-topbar">
+          <div className="lobby-brand">
+            <span className="lobby-room-pill">
+              <span className="lobby-room-label">Ride the Bus</span>
+              <button
+                type="button"
+                className="room-code-btn"
+                title="Copy code"
+                onClick={() => void navigator.clipboard.writeText(state.roomCode)}
+              >
+                {state.roomCode}
+              </button>
+            </span>
+            {isHost ? <span className="badge-host">Host</span> : null}
+          </div>
+        </header>
+        <RideTheBusGame state={state} myId={myId} />
+        {actionError ? <p className="error">{actionError}</p> : null}
+        <p style={{ marginTop: '1.5rem' }}>
+          <Link to="/">Home</Link>
+        </p>
+        <p className="disclaimer">
+          Drink responsibly. This game references drinking as a social prompt only.
+        </p>
+      </>
+    );
+  }
+
+  if (state.phase === 'twoTruthsLie' && state.twoTruthsLie) {
+    return (
+      <>
+        {toast ? (
+          <div className="card-panel" style={{ borderColor: 'rgba(252,165,165,0.4)' }}>
+            {toast}
+          </div>
+        ) : null}
+        {partyMoment ? (
+          <PartyMomentOverlay
+            moment={partyMoment}
+            onClose={() => setPartyMoment(null)}
+            soundEnabled={sfxOn}
+          />
+        ) : null}
+        <header className="lobby-topbar">
+          <div className="lobby-brand">
+            <span className="lobby-room-pill">
+              <span className="lobby-room-label">Two Truths &amp; a Lie</span>
+              <button
+                type="button"
+                className="room-code-btn"
+                title="Copy code"
+                onClick={() => void navigator.clipboard.writeText(state.roomCode)}
+              >
+                {state.roomCode}
+              </button>
+            </span>
+            {isHost ? <span className="badge-host">Host</span> : null}
+          </div>
+        </header>
+        <TwoTruthsLieGame state={state} myId={myId} />
         {actionError ? <p className="error">{actionError}</p> : null}
         <p style={{ marginTop: '1.5rem' }}>
           <Link to="/">Home</Link>
@@ -835,6 +939,16 @@ export default function RoomPage() {
                     <strong className="td-highlight">Kings Cup</strong> — 53 cards (52 + one secret X). Take turns
                     drawing; rules on each card.
                   </>
+                ) : gameMode === 'rideTheBus' ? (
+                  <>
+                    <strong className="td-highlight">Ride the Bus</strong> — hot seat flips four cards and answers four
+                    questions. Finish all four to pass the turn.
+                  </>
+                ) : gameMode === 'twoTruthsLie' ? (
+                  <>
+                    <strong className="td-highlight">Two Truths &amp; a Lie</strong> — one hot seat, three statements,
+                    everyone votes on the lie.
+                  </>
                 ) : (
                   <>
                     <strong className="td-highlight">Truth or Dare</strong> — choose how you play and what goes in the
@@ -899,13 +1013,7 @@ export default function RoomPage() {
 
               <div className="mode-section">
                 <p className="mode-section-label">Other party modes</p>
-                <div
-                  className={`mode-card-row mode-card-row--other ${
-                    gameMode === 'sharedDeck' || gameMode === 'pickAndWrite'
-                      ? 'mode-card-row--triple'
-                      : 'mode-card-row--quad'
-                  }`}
-                >
+                <div className="mode-card-row mode-card-row--other mode-card-row--party">
                   {gameMode !== 'sharedDeck' && gameMode !== 'pickAndWrite' ? (
                     <button
                       type="button"
@@ -939,6 +1047,22 @@ export default function RoomPage() {
                   >
                     <span className="mode-card-title">🃏 Kings Cup</span>
                     <span className="mode-card-sub">Cards &amp; house rules</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`mode-card ${gameMode === 'rideTheBus' ? 'mode-card--active' : ''}`}
+                    onClick={() => setGameMode('rideTheBus')}
+                  >
+                    <span className="mode-card-title">🚌 Ride the Bus</span>
+                    <span className="mode-card-sub">Four-card ladder</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`mode-card ${gameMode === 'twoTruthsLie' ? 'mode-card--active' : ''}`}
+                    onClick={() => setGameMode('twoTruthsLie')}
+                  >
+                    <span className="mode-card-title">🤥 Two Truths &amp; a Lie</span>
+                    <span className="mode-card-sub">Guess the lie</span>
                   </button>
                 </div>
               </div>
@@ -1001,7 +1125,11 @@ export default function RoomPage() {
                         ? 'Most likely to'
                         : gameMode === 'kingsCup'
                           ? 'Kings Cup'
-                          : 'Truth or Dare — classic deck'}
+                          : gameMode === 'rideTheBus'
+                            ? 'Ride the Bus'
+                            : gameMode === 'twoTruthsLie'
+                              ? 'Two Truths & a Lie'
+                              : 'Truth or Dare — classic deck'}
                 </strong>
               </p>
             </div>
@@ -1057,6 +1185,24 @@ export default function RoomPage() {
                   disabled={state.players.length < 2}
                 >
                   Start Kings Cup
+                </button>
+              ) : gameMode === 'rideTheBus' ? (
+                <button
+                  type="button"
+                  className="btn-primary btn-primary-cta"
+                  onClick={startRideTheBus}
+                  disabled={state.players.length < 2}
+                >
+                  Start Ride the Bus
+                </button>
+              ) : gameMode === 'twoTruthsLie' ? (
+                <button
+                  type="button"
+                  className="btn-primary btn-primary-cta"
+                  onClick={startTwoTruthsLie}
+                  disabled={state.players.length < 2}
+                >
+                  Start Two Truths &amp; a Lie
                 </button>
               ) : gameMode === 'pickAndWrite' ? (
                 <button
@@ -1510,7 +1656,11 @@ export default function RoomPage() {
                     ? 'Deck finished — chaos contained.'
                     : gameMode === 'kingsCup'
                       ? 'Deck empty — the table is clear. Same crew, rematch anytime.'
-                      : 'You made it through the whole deck.'}
+                      : gameMode === 'rideTheBus'
+                        ? 'The whole crew made it through the bus. Same players, new run anytime.'
+                        : gameMode === 'twoTruthsLie'
+                          ? 'All rounds done — same crew, new lies anytime.'
+                          : 'You made it through the whole deck.'}
             </p>
             <div className="finished-actions">
               {isHost ? (

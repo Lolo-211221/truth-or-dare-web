@@ -833,9 +833,9 @@ body.party-shake {
   gap: 0.65rem;
 }
 
-@media (min-width: 540px) {
+@media (min-width: 720px) {
   .home-game-grid {
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(4, 1fr);
   }
 }
 
@@ -1284,6 +1284,16 @@ body.party-shake {
   grid-template-columns: repeat(2, 1fr);
 }
 
+.mode-card-row--party {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+@media (min-width: 720px) {
+  .mode-card-row--party {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
 .mode-card {
   display: flex;
   flex-direction: column;
@@ -1352,6 +1362,10 @@ body.party-shake {
   }
 
   .mode-card-row--quad {
+    grid-template-columns: 1fr;
+  }
+
+  .mode-card-row--party {
     grid-template-columns: 1fr;
   }
 }
@@ -1861,4 +1875,223 @@ body.party-shake {
   margin-top: 0.75rem;
   color: #fca5a5;
   font-size: 0.95rem;
+}
+
+/* --- Ride the Bus --- */
+.rtb-root {
+  margin-top: 0.5rem;
+}
+
+.rtb-header {
+  margin-bottom: 1rem;
+}
+
+.rtb-title {
+  margin: 0 0 0.35rem;
+  font-size: 1.35rem;
+}
+
+.rtb-sub {
+  margin: 0 0 0.35rem;
+}
+
+.rtb-progress {
+  margin: 0;
+  font-size: 0.9rem;
+  color: #c4b5fd;
+}
+
+.rtb-players {
+  list-style: none;
+  margin: 0 0 1rem;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.rtb-pl {
+  padding: 0.35rem 0.65rem;
+  border-radius: 999px;
+  background: rgba(196, 168, 255, 0.08);
+  border: 1px solid rgba(196, 168, 255, 0.15);
+  font-size: 0.88rem;
+}
+
+.rtb-pl--hot {
+  background: rgba(139, 92, 246, 0.3);
+  border-color: rgba(196, 168, 255, 0.45);
+  font-weight: 600;
+}
+
+.rtb-pl--done {
+  border-color: rgba(52, 211, 153, 0.45);
+}
+
+.rtb-badge {
+  margin-left: 0.35rem;
+  font-size: 0.72rem;
+  color: #6ee7b7;
+}
+
+.rtb-card-zone {
+  display: flex;
+  justify-content: center;
+  margin: 1rem 0;
+  min-height: 9rem;
+}
+
+.rtb-card-back {
+  width: 6rem;
+  height: 8.5rem;
+  border-radius: 0.65rem;
+  background: linear-gradient(145deg, #2d1f4a 0%, #1a1228 100%);
+  border: 2px solid rgba(196, 168, 255, 0.35);
+}
+
+.rtb-flip {
+  perspective: 900px;
+}
+
+.rtb-flip--on .rtb-card-face {
+  transform: rotateY(0deg);
+}
+
+.rtb-card-face {
+  width: 6rem;
+  height: 8.5rem;
+  border-radius: 0.65rem;
+  background: linear-gradient(160deg, #faf5ff 0%, #e9d5ff 100%);
+  border: 2px solid rgba(88, 28, 135, 0.35);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  transform: rotateY(90deg);
+  transition: transform 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+  color: #1a1228;
+}
+
+.rtb-card-rank {
+  font-size: 1.75rem;
+  font-weight: 800;
+}
+
+.rtb-card-suit {
+  font-size: 2rem;
+}
+
+.rtb-guess {
+  margin-top: 1rem;
+}
+
+.rtb-q {
+  margin: 0 0 0.65rem;
+  font-weight: 600;
+}
+
+.rtb-guess-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.rtb-suit-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+  width: 100%;
+  margin-top: 0.5rem;
+}
+
+.rtb-overlay {
+  margin-top: 1.25rem;
+  padding: 1.25rem;
+  border-radius: 1rem;
+  text-align: center;
+}
+
+.rtb-overlay--wrong {
+  background: rgba(127, 29, 29, 0.35);
+  border: 1px solid rgba(248, 113, 113, 0.45);
+}
+
+.rtb-overlay--win {
+  background: rgba(22, 101, 52, 0.35);
+  border: 1px solid rgba(74, 222, 128, 0.45);
+}
+
+/* --- Two Truths & a Lie --- */
+.ttl-root {
+  margin-top: 0.5rem;
+}
+
+.ttl-title {
+  margin: 0 0 0.35rem;
+  font-size: 1.35rem;
+}
+
+.ttl-private-banner {
+  margin: 0 0 0.75rem;
+  padding: 0.5rem 0.65rem;
+  border-radius: 0.5rem;
+  background: rgba(234, 179, 8, 0.15);
+  border: 1px solid rgba(250, 204, 21, 0.35);
+  font-size: 0.88rem;
+}
+
+.ttl-label {
+  display: block;
+  margin-top: 0.5rem;
+  font-size: 0.85rem;
+}
+
+.ttl-ta {
+  width: 100%;
+  margin-bottom: 0.35rem;
+}
+
+.ttl-lie-pick {
+  margin: 0.75rem 0 0.35rem;
+}
+
+.ttl-lie-row {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.ttl-stmt {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.65rem;
+  text-align: left;
+}
+
+.ttl-stmt-n {
+  font-weight: 700;
+  color: #c4b5fd;
+}
+
+.ttl-vote-btns {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.ttl-vote-count {
+  margin: 0.75rem 0 0;
+  font-size: 0.85rem;
+}
+
+.ttl-drink-msg {
+  margin: 0.75rem 0;
+  font-size: 1rem;
+}
+
+.ttl-wait {
+  text-align: center;
 }

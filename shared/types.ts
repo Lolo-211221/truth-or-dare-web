@@ -3,7 +3,9 @@ export type GameMode =
   | 'pickAndWrite'
   | 'neverHaveIEver'
   | 'mostLikelyTo'
-  | 'kingsCup';
+  | 'kingsCup'
+  | 'rideTheBus'
+  | 'twoTruthsLie';
 
 /** Truth or Dare play style (shared deck + pick & write). */
 export type TruthDarePlayStyle = 'truthOnly' | 'dareOnly' | 'mixed';
@@ -20,6 +22,8 @@ export type Phase =
   | 'authorPrompt'
   | 'revealTurn'
   | 'kingsCup'
+  | 'rideTheBus'
+  | 'twoTruthsLie'
   | 'finished';
 
 export type CardKind = 'truth' | 'dare' | 'nhie' | 'mlt';
@@ -112,6 +116,50 @@ export interface KingsCupState {
   lastPenaltyPlayerId: string | null;
 }
 
+/** Ride the Bus — hot seat clears 4 guesses in a row. */
+export type RideTheBusUiStep = 'awaitFlip' | 'awaitGuess' | 'wrong' | 'roundWin';
+
+export interface RideTheBusCardFace {
+  rank: string;
+  suit: string;
+}
+
+export interface RideTheBusState {
+  hotSeatPlayerId: string;
+  completedPlayerIds: string[];
+  /** 0–3 = which card we’re answering */
+  questionIndex: number;
+  /** 1–4 for UI labels */
+  currentQuestion1Based: number;
+  cardsThisRound: RideTheBusCardFace[];
+  faceUpCard: RideTheBusCardFace | null;
+  uiStep: RideTheBusUiStep;
+  cardsRemaining: number;
+  wrongMessage: string | null;
+  totalPlayers: number;
+  /** Present during celebration between players */
+  lastRoundSurvivorId: string | null;
+}
+
+/** Two truths & a lie */
+export type TwoTruthsLieUiStep = 'entering' | 'voting' | 'reveal';
+
+export interface TwoTruthsLieState {
+  hotSeatPlayerId: string;
+  roundNumber: number;
+  totalRounds: number;
+  uiStep: TwoTruthsLieUiStep;
+  /** Hidden for non-hot-seat during entering */
+  statements: [string, string, string] | null;
+  lieIndex: number | null;
+  votesReceived: number;
+  votesExpected: number;
+  drinkers: string[];
+  wrongGuessers: string[];
+  allVotersCorrect: boolean;
+  youVoted: boolean;
+}
+
 export interface PartyMomentPayload {
   id: string;
   category: ReactionCategory;
@@ -201,6 +249,9 @@ export interface RoomState {
 
   /** Present when gameMode === 'kingsCup' and phase === 'kingsCup' */
   kingsCup: KingsCupState | null;
+
+  rideTheBus: RideTheBusState | null;
+  twoTruthsLie: TwoTruthsLieState | null;
 }
 
 /** Defaults when creating a room; server may seed ms from env. */
