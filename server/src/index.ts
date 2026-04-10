@@ -23,6 +23,15 @@ import type {
   VoteSessionState,
 } from './sharedTypes.js';
 import {
+  advanceKingsTurn,
+  clearKingsCupTimers,
+  currentKingsTurnPlayerId,
+  initKingsCupInternal,
+  kcToPublic,
+  rankKey,
+  type KingsCupInternal,
+} from './kingsCup.js';
+import {
   MAX_CARD_TEXT_LENGTH,
   MAX_PLAYERS_PER_ROOM,
   MAX_PLAYER_NAME_LENGTH,
@@ -359,6 +368,8 @@ interface InternalRoom {
   deckRecentIndices: number[];
   /** Normalized card texts from recent turns — reduces back-to-back repeats when shuffling */
   deckRecentTexts: string[];
+
+  kingsCup: KingsCupInternal | null;
 }
 
 const rooms = new Map<string, InternalRoom>();
@@ -473,12 +484,14 @@ function voteSessionToPublic(room: InternalRoom, forSocketId?: string): VoteSess
 }
 
 function toRoomState(room: InternalRoom, forSocketId?: string): RoomState {
-  const active =
-    room.phase === 'turn'
-      ? activePlayerIdDeck(room)
-      : room.phase === 'revealTurn'
-        ? room.subjectPlayerId
-        : null;
+  let active: string | null = null;
+  if (room.phase === 'kingsCup' && room.kingsCup) {
+    active = currentKingsTurnPlayerId(room.playerOrder, room.kingsCup.turnIndex);
+  } else if (room.phase === 'turn') {
+    active = activePlayerIdDeck(room);
+  } else if (room.phase === 'revealTurn') {
+    active = room.subjectPlayerId;
+  }
 
   const { teams, playerTeamId, teamScores } = teamsToPublic(room);
 
@@ -509,6 +522,7 @@ function toRoomState(room: InternalRoom, forSocketId?: string): RoomState {
     teamRevealActive: room.teamRevealActive,
     voteSession: voteSessionToPublic(room, forSocketId),
     deckRecentIndices: [...room.deckRecentIndices],
+    kingsCup: kcToPublic(room),
   };
 }
 
@@ -516,6 +530,200 @@ function emitRoomState(ioSrv: Server, room: InternalRoom) {
   for (const sid of room.playerOrder) {
     ioSrv.to(sid).emit('room_state', toRoomState(room, sid));
   }
+}
+
+function parseInitialGameMode(raw: unknown): GameMode {
+  const m = raw as string;
+  if (
+    m === 'sharedDeck' ||
+    m === 'pickAndWrite' ||
+    m === 'neverHaveIEver' ||
+    m === 'mostLikelyTo' ||
+    m === 'kingsCup'
+  ) {
+    return m;
+  }
+  return 'sharedDeck';
+}
+
+function finishKingsCupGame(ioSrv: Server, room: InternalRoom) {
+  if (room.kingsCup) clearKingsCupTimers(room.kingsCup);
+  room.kingsCup = null;
+  room.phase = 'finished';
+  emitRoomState(ioSrv, room);
+}
+
+function resolveHeavenMinigame(ioSrv: Server, room: InternalRoom) {
+  const k = room.kingsCup;
+  if (!k || k.uiStep !== 'heaven') return;
+  if (k.heavenTimer) {
+    clearTimeout(k.heavenTimer);
+    k.heavenTimer = null;
+  }
+  const order = room.playerOrder;
+  let loser: string | null = null;
+  if (k.heavenTaps.size === 0) {
+    loser = k.drawerId ?? null;
+  } else {
+    for (const id of order) {
+      if (!k.heavenTaps.has(id)) {
+        loser = id;
+        break;
+      }
+    }
+    if (!loser) {
+      let maxT = -1;
+      for (const id of order) {
+        const t = k.heavenTaps.get(id);
+        if (t != null && t >= maxT) {
+          maxT = t;
+          loser = id;
+        }
+      }
+    }
+  }
+  k.lastPenaltyPlayerId = loser;
+  k.heavenEndsAt = null;
+  const wasLast = k.remaining.length === 0;
+  advanceKingsTurn(k, order.length);
+  if (wasLast) {
+    finishKingsCupGame(ioSrv, room);
+  } else {
+    emitRoomState(ioSrv, room);
+  }
+}
+
+function resolveDriveStep(ioSrv: Server, room: InternalRoom, code: string) {
+  const k = room.kingsCup;
+  if (!k || k.uiStep !== 'drive') return;
+  const order = room.playerOrder;
+  const n = order.length;
+  let loser: string | null = null;
+  if (k.driveTaps.size === 0) {
+    loser = k.drawerId ?? null;
+  } else {
+    for (const id of order) {
+      if (!k.driveTaps.has(id)) {
+        loser = id;
+        break;
+      }
+    }
+    if (!loser) {
+      let maxT = -1;
+      for (const id of order) {
+        const t = k.driveTaps.get(id);
+        if (t != null && t >= maxT) {
+          maxT = t;
+          loser = id;
+        }
+      }
+    }
+  }
+  k.lastPenaltyPlayerId = loser;
+  k.driveTaps.clear();
+  k.driveStep += 1;
+  if (k.driveStep >= 3) {
+    k.driveEndsAt = null;
+    if (k.driveTimer) {
+      clearTimeout(k.driveTimer);
+      k.driveTimer = null;
+    }
+    const wasLast = k.remaining.length === 0;
+    advanceKingsTurn(k, order.length);
+    if (wasLast) {
+      finishKingsCupGame(ioSrv, room);
+    } else {
+      emitRoomState(ioSrv, room);
+    }
+    return;
+  }
+  k.driveEndsAt = Date.now() + 8000;
+  if (k.driveTimer) clearTimeout(k.driveTimer);
+  k.driveTimer = setTimeout(() => {
+    const r = rooms.get(code);
+    if (!r?.kingsCup || r.kingsCup.uiStep !== 'drive') return;
+    resolveDriveStep(ioSrv, r, code);
+  }, 8100);
+  emitRoomState(ioSrv, room);
+}
+
+function tryResolveDriveEarly(ioSrv: Server, room: InternalRoom, code: string) {
+  const k = room.kingsCup;
+  if (!k || k.uiStep !== 'drive') return;
+  if (k.driveTaps.size >= room.playerOrder.length) {
+    if (k.driveTimer) {
+      clearTimeout(k.driveTimer);
+      k.driveTimer = null;
+    }
+    resolveDriveStep(ioSrv, room, code);
+  }
+}
+
+function applyKingsCardAck(ioSrv: Server, room: InternalRoom, code: string) {
+  const k = room.kingsCup;
+  if (!k || !k.faceUp || k.uiStep !== 'cardFaceUp') return;
+  const card = k.faceUp;
+  const rk = rankKey(card);
+  const wasLast = k.remaining.length === 0;
+  const drawer = k.drawerId;
+  const n = room.playerOrder.length;
+
+  if (rk === 'X') {
+    k.lastPenaltyPlayerId = drawer;
+    advanceKingsTurn(k, n);
+    if (wasLast) finishKingsCupGame(ioSrv, room);
+    else emitRoomState(ioSrv, room);
+    return;
+  }
+
+  if (rk === '5') {
+    k.uiStep = 'drive';
+    k.driveStep = 0;
+    k.driveTaps.clear();
+    k.driveEndsAt = Date.now() + 8000;
+    if (k.driveTimer) clearTimeout(k.driveTimer);
+    k.driveTimer = setTimeout(() => {
+      const r = rooms.get(code);
+      if (!r?.kingsCup || r.kingsCup.uiStep !== 'drive') return;
+      resolveDriveStep(ioSrv, r, code);
+    }, 8100);
+    emitRoomState(ioSrv, room);
+    return;
+  }
+
+  if (rk === '7') {
+    k.uiStep = 'heaven';
+    k.heavenTaps.clear();
+    k.heavenEndsAt = Date.now() + 5000;
+    if (k.heavenTimer) clearTimeout(k.heavenTimer);
+    k.heavenTimer = setTimeout(() => {
+      const r = rooms.get(code);
+      if (!r?.kingsCup || r.kingsCup.uiStep !== 'heaven') return;
+      resolveHeavenMinigame(ioSrv, r);
+    }, 5200);
+    emitRoomState(ioSrv, room);
+    return;
+  }
+
+  if (rk === '2' || rk === '8' || rk === 'Q') {
+    k.pickKind = rk as '2' | '8' | 'Q';
+    k.uiStep = 'pickPlayer';
+    emitRoomState(ioSrv, room);
+    return;
+  }
+
+  if (rk === 'K') {
+    k.activeRule = null;
+    k.activeRuleSetterId = null;
+    k.uiStep = 'kingRule';
+    k.kingRuleSetterId = drawer ?? null;
+    emitRoomState(ioSrv, room);
+    return;
+  }
+
+  advanceKingsTurn(k, n);
+  if (wasLast) finishKingsCupGame(ioSrv, room);
+  else emitRoomState(ioSrv, room);
 }
 
 function pickRandomAuthor(room: InternalRoom, subjectId: string): string {
@@ -1014,7 +1222,7 @@ const io = new Server(httpServer, {
 io.on('connection', (socket) => {
   const ip = socket.handshake.address || 'unknown';
 
-  socket.on('create_room', (payload: { playerName: string }, ack) => {
+  socket.on('create_room', (payload: { playerName: string; gameMode?: GameMode }, ack) => {
     if (!checkRate(ip)) {
       ack?.({ ok: false, error: 'Too many requests. Try again in a minute.' });
       return;
@@ -1044,7 +1252,7 @@ io.on('connection', (socket) => {
       truthAdvanceAt: null,
       pendingAdvance: false,
       truthAdvanceTimer: null,
-      gameMode: 'sharedDeck',
+      gameMode: parseInitialGameMode(payload?.gameMode),
       subjectPlayerId: null,
       authorPlayerId: null,
       pickedKind: null,
@@ -1069,6 +1277,7 @@ io.on('connection', (socket) => {
       voteSession: null,
       deckRecentIndices: [],
       deckRecentTexts: [],
+      kingsCup: null,
     };
     rooms.set(code, room);
     socket.join(code);
@@ -1104,7 +1313,9 @@ io.on('connection', (socket) => {
       return;
     }
     if (
-      ['shuffling', 'turn', 'finished', 'pickType', 'authorPrompt', 'revealTurn'].includes(room.phase)
+      ['shuffling', 'turn', 'finished', 'pickType', 'authorPrompt', 'revealTurn', 'kingsCup'].includes(
+        room.phase,
+      )
     ) {
       ack?.({ ok: false, error: 'This game already started. Ask for a new room.' });
       return;
@@ -1190,7 +1401,8 @@ io.on('connection', (socket) => {
       m !== 'sharedDeck' &&
       m !== 'pickAndWrite' &&
       m !== 'neverHaveIEver' &&
-      m !== 'mostLikelyTo'
+      m !== 'mostLikelyTo' &&
+      m !== 'kingsCup'
     ) {
       ack?.({ ok: false, error: 'Invalid game mode.' });
       return;
@@ -1681,8 +1893,191 @@ io.on('connection', (socket) => {
     for (const tid of room.teamScores.keys()) {
       room.teamScores.set(tid, 0);
     }
+    if (room.kingsCup) clearKingsCupTimers(room.kingsCup);
+    room.kingsCup = null;
     ack?.({ ok: true });
     emitRoomState(io, room);
+  });
+
+  socket.on('start_kings_cup', (payload: { hostToken: string }, ack) => {
+    const code = socketRoom.get(socket.id);
+    if (!code) {
+      ack?.({ ok: false, error: 'Not in a room.' });
+      return;
+    }
+    const room = rooms.get(code);
+    if (!room || room.hostSocketId !== socket.id || payload?.hostToken !== room.hostToken) {
+      ack?.({ ok: false, error: 'Only the host can start.' });
+      return;
+    }
+    if (room.phase !== 'lobby') {
+      ack?.({ ok: false, error: 'Already started.' });
+      return;
+    }
+    if (room.gameMode !== 'kingsCup') {
+      ack?.({ ok: false, error: 'Room is not Kings Cup mode.' });
+      return;
+    }
+    if (room.players.size < 2) {
+      ack?.({ ok: false, error: 'Need at least 2 players.' });
+      return;
+    }
+    if (room.kingsCup) clearKingsCupTimers(room.kingsCup);
+    room.kingsCup = initKingsCupInternal();
+    room.phase = 'kingsCup';
+    ack?.({ ok: true });
+    emitRoomState(io, room);
+  });
+
+  socket.on('kings_draw', (_payload, ack) => {
+    const code = socketRoom.get(socket.id);
+    if (!code) {
+      ack?.({ ok: false, error: 'Not in a room.' });
+      return;
+    }
+    const room = rooms.get(code);
+    if (!room || room.phase !== 'kingsCup' || !room.kingsCup) {
+      ack?.({ ok: false, error: 'Not in a Kings Cup game.' });
+      return;
+    }
+    const k = room.kingsCup;
+    if (k.uiStep !== 'waitingDraw') {
+      ack?.({ ok: false, error: 'Not your turn to draw.' });
+      return;
+    }
+    const expected = currentKingsTurnPlayerId(room.playerOrder, k.turnIndex);
+    if (socket.id !== expected) {
+      ack?.({ ok: false, error: 'Wait for your turn.' });
+      return;
+    }
+    k.lastPenaltyPlayerId = null;
+    if (k.remaining.length === 0) {
+      finishKingsCupGame(io, room);
+      ack?.({ ok: true });
+      return;
+    }
+    const card = k.remaining.pop()!;
+    k.faceUp = card;
+    k.drawerId = socket.id;
+    k.uiStep = 'cardFaceUp';
+    ack?.({ ok: true });
+    emitRoomState(io, room);
+  });
+
+  socket.on('kings_ack_reveal', (_payload, ack) => {
+    const code = socketRoom.get(socket.id);
+    if (!code) {
+      ack?.({ ok: false, error: 'Not in a room.' });
+      return;
+    }
+    const room = rooms.get(code);
+    if (!room?.kingsCup || room.phase !== 'kingsCup') {
+      ack?.({ ok: false, error: 'No active card.' });
+      return;
+    }
+    const k = room.kingsCup;
+    if (k.uiStep !== 'cardFaceUp' || socket.id !== k.drawerId) {
+      ack?.({ ok: false, error: 'Only the drawer can continue.' });
+      return;
+    }
+    applyKingsCardAck(io, room, code);
+    ack?.({ ok: true });
+  });
+
+  socket.on('kings_heaven_tap', (_payload, ack) => {
+    const code = socketRoom.get(socket.id);
+    if (!code) {
+      ack?.({ ok: false, error: 'Not in a room.' });
+      return;
+    }
+    const room = rooms.get(code);
+    const k = room?.kingsCup;
+    if (!k || k.uiStep !== 'heaven') {
+      ack?.({ ok: false, error: 'Not in heaven round.' });
+      return;
+    }
+    k.heavenTaps.set(socket.id, Date.now());
+    ack?.({ ok: true });
+    emitRoomState(io, room);
+  });
+
+  socket.on('kings_drive_tap', (_payload, ack) => {
+    const code = socketRoom.get(socket.id);
+    if (!code) {
+      ack?.({ ok: false, error: 'Not in a room.' });
+      return;
+    }
+    const room = rooms.get(code);
+    const k = room?.kingsCup;
+    if (!k || k.uiStep !== 'drive') {
+      ack?.({ ok: false, error: 'Not in drive round.' });
+      return;
+    }
+    k.driveTaps.set(socket.id, Date.now());
+    tryResolveDriveEarly(io, room, code);
+    ack?.({ ok: true });
+    emitRoomState(io, room);
+  });
+
+  socket.on('kings_pick_player', (payload: { targetId: string }, ack) => {
+    const code = socketRoom.get(socket.id);
+    if (!code) {
+      ack?.({ ok: false, error: 'Not in a room.' });
+      return;
+    }
+    const room = rooms.get(code);
+    const k = room?.kingsCup;
+    if (!room || !k || k.uiStep !== 'pickPlayer' || !k.pickKind || !k.drawerId) {
+      ack?.({ ok: false, error: 'Cannot pick now.' });
+      return;
+    }
+    if (socket.id !== k.drawerId) {
+      ack?.({ ok: false, error: 'Only the card drawer picks.' });
+      return;
+    }
+    const targetId = payload?.targetId;
+    if (!targetId || !room.players.has(targetId)) {
+      ack?.({ ok: false, error: 'Pick a player in the room.' });
+      return;
+    }
+    if (k.pickKind === '2') k.lastPenaltyPlayerId = targetId;
+    if (k.pickKind === '8') k.drinkingBuddy = { a: k.drawerId, b: targetId };
+    if (k.pickKind === 'Q') k.queenCurse = { queenId: k.drawerId, cursedId: targetId };
+    const wasLast = k.remaining.length === 0;
+    advanceKingsTurn(k, room.playerOrder.length);
+    if (wasLast) finishKingsCupGame(io, room);
+    else emitRoomState(io, room);
+    ack?.({ ok: true });
+  });
+
+  socket.on('kings_submit_king_rule', (payload: { text: string }, ack) => {
+    const code = socketRoom.get(socket.id);
+    if (!code) {
+      ack?.({ ok: false, error: 'Not in a room.' });
+      return;
+    }
+    const room = rooms.get(code);
+    const k = room?.kingsCup;
+    if (!room || !k || k.uiStep !== 'kingRule' || !k.kingRuleSetterId) {
+      ack?.({ ok: false, error: 'No rule entry.' });
+      return;
+    }
+    if (socket.id !== k.kingRuleSetterId) {
+      ack?.({ ok: false, error: 'Only the King drawer sets the rule.' });
+      return;
+    }
+    const text = (payload?.text ?? '').trim().slice(0, 280);
+    if (!text) {
+      ack?.({ ok: false, error: 'Write a rule.' });
+      return;
+    }
+    k.activeRule = text;
+    k.activeRuleSetterId = socket.id;
+    const wasLast = k.remaining.length === 0;
+    advanceKingsTurn(k, room.playerOrder.length);
+    if (wasLast) finishKingsCupGame(io, room);
+    else emitRoomState(io, room);
+    ack?.({ ok: true });
   });
 
   socket.on('clear_vote', (payload: { hostToken: string }, ack) => {

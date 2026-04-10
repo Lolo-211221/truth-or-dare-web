@@ -1,4 +1,9 @@
-export type GameMode = 'sharedDeck' | 'pickAndWrite' | 'neverHaveIEver' | 'mostLikelyTo';
+export type GameMode =
+  | 'sharedDeck'
+  | 'pickAndWrite'
+  | 'neverHaveIEver'
+  | 'mostLikelyTo'
+  | 'kingsCup';
 
 export type TruthDarePlayStyle = 'truthOnly' | 'dareOnly' | 'mixed';
 
@@ -12,6 +17,7 @@ export type Phase =
   | 'pickType'
   | 'authorPrompt'
   | 'revealTurn'
+  | 'kingsCup'
   | 'finished';
 
 export type CardKind = 'truth' | 'dare' | 'nhie' | 'mlt';
@@ -51,6 +57,40 @@ export interface VoteSessionState {
   tallies?: Record<string, number>;
   votes?: Record<string, string>;
   youVoted: boolean;
+}
+
+export type KingsCupUiStep =
+  | 'waitingDraw'
+  | 'cardFaceUp'
+  | 'heaven'
+  | 'drive'
+  | 'pickPlayer'
+  | 'kingRule';
+
+export interface KingsCupCardFace {
+  rank: string;
+  suit: string;
+  isX: boolean;
+}
+
+export interface KingsCupState {
+  cardsRemaining: number;
+  currentTurnPlayerId: string;
+  uiStep: KingsCupUiStep;
+  faceUpCard: KingsCupCardFace | null;
+  drawerId: string | null;
+  activeRule: string | null;
+  activeRuleSetterId: string | null;
+  queenCurse: { queenId: string; cursedId: string } | null;
+  drinkingBuddy: { aId: string; bId: string } | null;
+  heavenEndsAt: number | null;
+  heavenTaps: Record<string, number>;
+  driveStep: number;
+  driveEndsAt: number | null;
+  driveTaps: Record<string, number>;
+  pickPlayerFor: '2' | '8' | 'Q' | null;
+  kingRuleSetterId: string | null;
+  lastPenaltyPlayerId: string | null;
 }
 
 export interface PartyMomentPayload {
@@ -105,6 +145,7 @@ export interface RoomState {
   teamRevealActive: boolean;
   voteSession: VoteSessionState | null;
   deckRecentIndices: number[];
+  kingsCup: KingsCupState | null;
 }
 
 export const MAX_CARD_TEXT_LENGTH = 200;

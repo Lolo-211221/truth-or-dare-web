@@ -1,4 +1,9 @@
-export type GameMode = 'sharedDeck' | 'pickAndWrite' | 'neverHaveIEver' | 'mostLikelyTo';
+export type GameMode =
+  | 'sharedDeck'
+  | 'pickAndWrite'
+  | 'neverHaveIEver'
+  | 'mostLikelyTo'
+  | 'kingsCup';
 
 /** Truth or Dare play style (shared deck + pick & write). */
 export type TruthDarePlayStyle = 'truthOnly' | 'dareOnly' | 'mixed';
@@ -14,6 +19,7 @@ export type Phase =
   | 'pickType'
   | 'authorPrompt'
   | 'revealTurn'
+  | 'kingsCup'
   | 'finished';
 
 export type CardKind = 'truth' | 'dare' | 'nhie' | 'mlt';
@@ -62,6 +68,48 @@ export interface VoteSessionState {
   votes?: Record<string, string>;
   /** Current socket already cast a vote */
   youVoted: boolean;
+}
+
+/** Kings Cup — synced game state (53 cards: 52 + X). */
+export type KingsCupUiStep =
+  | 'waitingDraw'
+  | 'cardFaceUp'
+  | 'heaven'
+  | 'drive'
+  | 'pickPlayer'
+  | 'kingRule';
+
+export interface KingsCupCardFace {
+  rank: string;
+  suit: string;
+  isX: boolean;
+}
+
+export interface KingsCupState {
+  cardsRemaining: number;
+  currentTurnPlayerId: string;
+  uiStep: KingsCupUiStep;
+  faceUpCard: KingsCupCardFace | null;
+  /** Who drew the visible card */
+  drawerId: string | null;
+  activeRule: string | null;
+  /** Who set the current King rule */
+  activeRuleSetterId: string | null;
+  /** Cursed player cannot answer the Queen holder’s questions */
+  queenCurse: { queenId: string; cursedId: string } | null;
+  drinkingBuddy: { aId: string; bId: string } | null;
+  heavenEndsAt: number | null;
+  /** playerId -> tap timestamp ms */
+  heavenTaps: Record<string, number>;
+  /** 0 = 👍, 1 = vroom, 2 = skirt */
+  driveStep: number;
+  driveEndsAt: number | null;
+  /** playerId -> tap time for current drive step */
+  driveTaps: Record<string, number>;
+  pickPlayerFor: '2' | '8' | 'Q' | null;
+  kingRuleSetterId: string | null;
+  /** After minigames — who drinks (display) */
+  lastPenaltyPlayerId: string | null;
 }
 
 export interface PartyMomentPayload {
@@ -150,6 +198,9 @@ export interface RoomState {
 
   /** Recent card indices to reduce immediate repeats (shared deck) */
   deckRecentIndices: number[];
+
+  /** Present when gameMode === 'kingsCup' and phase === 'kingsCup' */
+  kingsCup: KingsCupState | null;
 }
 
 /** Defaults when creating a room; server may seed ms from env. */

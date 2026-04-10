@@ -16,6 +16,7 @@ import { useCardSwipe } from '../party/useCardSwipe';
 import { useLobbyMusic } from '../useLobbyMusic';
 import { LobbySettingsContent } from '../lobby/LobbySettingsContent';
 import { TeamSetupPanel } from '../lobby/TeamSetupPanel';
+import { KingsCupGame } from '../kings/KingsCupGame';
 
 function ensureConnected() {
   if (!socket.connected) socket.connect();
@@ -45,6 +46,7 @@ function normalizeRoomState(s: RoomState): RoomState {
     teamRevealActive: s.teamRevealActive ?? false,
     voteSession: s.voteSession ?? null,
     deckRecentIndices: Array.isArray(s.deckRecentIndices) ? s.deckRecentIndices : [],
+    kingsCup: s.kingsCup ?? null,
     gameMode: (s.gameMode ?? 'sharedDeck') as GameMode,
     phase: s.phase ?? 'lobby',
     currentCardIndex: typeof s.currentCardIndex === 'number' ? s.currentCardIndex : 0,
@@ -399,6 +401,13 @@ export default function RoomPage() {
     });
   };
 
+  const startKingsCup = () => {
+    setActionError('');
+    socket.emit('start_kings_cup', { hostToken }, (res: { ok: boolean; error?: string }) => {
+      if (!res?.ok) setActionError(res?.error ?? 'Could not start Kings Cup.');
+    });
+  };
+
   const pushTeamNames = () => {
     setActionError('');
     const nameA = teamNameInputA.current?.value?.trim() || 'Team A';
@@ -555,6 +564,49 @@ export default function RoomPage() {
 
   const iAmSubject = state.subjectPlayerId === myId;
   const iAmAuthor = state.authorPlayerId === myId;
+
+  if (state.phase === 'kingsCup' && state.kingsCup) {
+    return (
+      <>
+        {toast ? (
+          <div className="card-panel" style={{ borderColor: 'rgba(252,165,165,0.4)' }}>
+            {toast}
+          </div>
+        ) : null}
+        {partyMoment ? (
+          <PartyMomentOverlay
+            moment={partyMoment}
+            onClose={() => setPartyMoment(null)}
+            soundEnabled={sfxOn}
+          />
+        ) : null}
+        <header className="lobby-topbar">
+          <div className="lobby-brand">
+            <span className="lobby-room-pill">
+              <span className="lobby-room-label">Kings Cup</span>
+              <button
+                type="button"
+                className="room-code-btn"
+                title="Copy code"
+                onClick={() => void navigator.clipboard.writeText(state.roomCode)}
+              >
+                {state.roomCode}
+              </button>
+            </span>
+            {isHost ? <span className="badge-host">Host</span> : null}
+          </div>
+        </header>
+        <KingsCupGame state={state} myId={myId} sfxOn={sfxOn} />
+        {actionError ? <p className="error">{actionError}</p> : null}
+        <p style={{ marginTop: '1.5rem' }}>
+          <Link to="/">Home</Link>
+        </p>
+        <p className="disclaimer">
+          Drink responsibly. This game references drinking as a social prompt only.
+        </p>
+      </>
+    );
+  }
 
   return (
     <>
@@ -780,8 +832,17 @@ export default function RoomPage() {
             <div className="card-panel lobby-modes">
               <h2 className="section-title">Choose a game</h2>
               <p className="muted lobby-modes-lead">
-                <strong className="td-highlight">Truth or Dare</strong> is one experience — pick a flow below.
-                NHIE &amp; Most Likely are separate vibes.
+                {gameMode === 'kingsCup' ? (
+                  <>
+                    <strong className="td-highlight">Kings Cup</strong> — 53 cards (52 + one secret X). Take turns
+                    drawing; rules on each card.
+                  </>
+                ) : (
+                  <>
+                    <strong className="td-highlight">Truth or Dare</strong> is one experience — pick a flow below.
+                    NHIE, Most Likely &amp; Kings Cup are separate vibes.
+                  </>
+                )}
               </p>
 
               <div className="mode-section">
@@ -837,13 +898,13 @@ export default function RoomPage() {
 
               <div className="mode-section">
                 <p className="mode-section-label">Other party modes</p>
-                <div className="mode-card-row mode-card-row--other">
+                <div className="mode-card-row mode-card-row--other mode-card-row--triple">
                   <button
                     type="button"
                     className={`mode-card ${gameMode === 'neverHaveIEver' ? 'mode-card--active' : ''}`}
                     onClick={() => setGameMode('neverHaveIEver')}
                   >
-                    <span className="mode-card-title">Never have I ever</span>
+                    <span className="mode-card-title">👆 Never have I ever</span>
                     <span className="mode-card-sub">Statement rounds</span>
                   </button>
                   <button
@@ -851,8 +912,16 @@ export default function RoomPage() {
                     className={`mode-card ${gameMode === 'mostLikelyTo' ? 'mode-card--active' : ''}`}
                     onClick={() => setGameMode('mostLikelyTo')}
                   >
-                    <span className="mode-card-title">Most likely to</span>
+                    <span className="mode-card-title">🗳️ Most likely to</span>
                     <span className="mode-card-sub">Callouts &amp; chaos</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`mode-card ${gameMode === 'kingsCup' ? 'mode-card--active' : ''}`}
+                    onClick={() => setGameMode('kingsCup')}
+                  >
+                    <span className="mode-card-title">🃏 Kings Cup</span>
+                    <span className="mode-card-sub">Cards &amp; house rules</span>
                   </button>
                 </div>
               </div>
@@ -913,7 +982,9 @@ export default function RoomPage() {
                       ? 'Never have I ever'
                       : gameMode === 'mostLikelyTo'
                         ? 'Most likely to'
-                        : 'Truth or Dare — classic deck'}
+                        : gameMode === 'kingsCup'
+                          ? 'Kings Cup'
+                          : 'Truth or Dare — classic deck'}
                 </strong>
               </p>
             </div>
@@ -949,7 +1020,16 @@ export default function RoomPage() {
             ) : null}
 
             {isHost ? (
-              gameMode === 'pickAndWrite' ? (
+              gameMode === 'kingsCup' ? (
+                <button
+                  type="button"
+                  className="btn-primary btn-primary-cta"
+                  onClick={startKingsCup}
+                  disabled={state.players.length < 2}
+                >
+                  Start Kings Cup
+                </button>
+              ) : gameMode === 'pickAndWrite' ? (
                 <button
                   type="button"
                   className="btn-primary"
@@ -1399,7 +1479,9 @@ export default function RoomPage() {
                   ? 'Every line played — legendary.'
                   : gameMode === 'mostLikelyTo'
                     ? 'Deck finished — chaos contained.'
-                    : 'You made it through the whole deck.'}
+                    : gameMode === 'kingsCup'
+                      ? 'Deck empty — the table is clear. Same crew, rematch anytime.'
+                      : 'You made it through the whole deck.'}
             </p>
             <div className="finished-actions">
               {isHost ? (

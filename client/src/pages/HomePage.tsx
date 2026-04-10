@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import type { RoomState } from '@shared';
+import type { GameMode, RoomState } from '@shared';
 import { MAX_PLAYER_NAME_LENGTH, ROOM_CODE_LENGTH } from '@shared';
 import { socket } from '../socket';
 
@@ -8,10 +8,23 @@ function ensureConnected() {
   if (!socket.connected) socket.connect();
 }
 
+const HOME_GAME_OPTIONS: {
+  mode: GameMode;
+  emoji: string;
+  title: string;
+  sub: string;
+}[] = [
+  { mode: 'sharedDeck', emoji: '🎭', title: 'Truth or Dare', sub: 'Classic deck — everyone writes, random turns' },
+  { mode: 'kingsCup', emoji: '🃏', title: 'Kings Cup', sub: '52 cards + secret X — rules on every draw' },
+  { mode: 'neverHaveIEver', emoji: '👆', title: 'Never Have I Ever', sub: 'Statement rounds' },
+  { mode: 'mostLikelyTo', emoji: '🗳️', title: 'Most Likely To', sub: 'Callouts & chaos' },
+];
+
 export default function HomePage() {
   const navigate = useNavigate();
   const [name, setName] = useState(() => sessionStorage.getItem('tod_display_name') ?? '');
   const [joinCode, setJoinCode] = useState('');
+  const [selectedGame, setSelectedGame] = useState<GameMode>('sharedDeck');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState<'create' | 'join' | null>(null);
 
@@ -32,17 +45,21 @@ export default function HomePage() {
     }
     saveName(trimmed);
     setBusy('create');
-    socket.emit('create_room', { playerName: trimmed }, (res: { ok: boolean; error?: string; hostToken?: string; roomState?: RoomState }) => {
-      setBusy(null);
-      if (!res?.ok) {
-        setError(res?.error ?? 'Could not create room.');
-        return;
-      }
-      const code = res.roomState!.roomCode;
-      sessionStorage.setItem(`tod_host_${code}`, res.hostToken!);
-      sessionStorage.setItem('tod_last_room', code);
-      navigate(`/room/${code}`, { state: { initialState: res.roomState } });
-    });
+    socket.emit(
+      'create_room',
+      { playerName: trimmed, gameMode: selectedGame },
+      (res: { ok: boolean; error?: string; hostToken?: string; roomState?: RoomState }) => {
+        setBusy(null);
+        if (!res?.ok) {
+          setError(res?.error ?? 'Could not create room.');
+          return;
+        }
+        const code = res.roomState!.roomCode;
+        sessionStorage.setItem(`tod_host_${code}`, res.hostToken!);
+        sessionStorage.setItem('tod_last_room', code);
+        navigate(`/room/${code}`, { state: { initialState: res.roomState } });
+      },
+    );
   };
 
   const handleJoin = () => {
@@ -76,7 +93,7 @@ export default function HomePage() {
         <p className="home-eyebrow">Party game</p>
         <h1 className="home-title">Truth or Dare</h1>
         <p className="home-tagline">
-          One room, QR join, live lobby — classic Truth or Dare, NHIE, and Most Likely. Built for phones.
+          One room, QR join, live lobby — Truth or Dare, Kings Cup, NHIE, and Most Likely. Built for phones.
         </p>
       </header>
 
@@ -91,6 +108,32 @@ export default function HomePage() {
           autoComplete="nickname"
           className="input-lg"
         />
+      </div>
+
+      <div className="card-panel home-card home-game-picker">
+        <h2 className="home-game-picker-title">Pick a game</h2>
+        <p className="muted home-game-picker-lead">One mode per room — tap a card, then create.</p>
+        <div className="home-game-grid" role="listbox" aria-label="Game mode">
+          {HOME_GAME_OPTIONS.map((opt) => {
+            const active = selectedGame === opt.mode;
+            return (
+              <button
+                key={opt.mode}
+                type="button"
+                role="option"
+                aria-selected={active}
+                className={`home-game-card ${active ? 'home-game-card--active' : ''}`}
+                onClick={() => setSelectedGame(opt.mode)}
+              >
+                <span className="home-game-card-emoji" aria-hidden>
+                  {opt.emoji}
+                </span>
+                <span className="home-game-card-title">{opt.title}</span>
+                <span className="home-game-card-sub">{opt.sub}</span>
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       <div className="home-actions">

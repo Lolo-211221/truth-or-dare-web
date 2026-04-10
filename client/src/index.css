@@ -806,6 +806,79 @@ body.party-shake {
   margin-top: 2rem;
 }
 
+.home-game-picker {
+  margin-bottom: 0.25rem;
+}
+
+.home-game-picker-title {
+  margin: 0 0 0.35rem;
+  font-size: 1.1rem;
+}
+
+.home-game-picker-lead {
+  margin: 0 0 1rem;
+  font-size: 0.88rem;
+}
+
+.home-game-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.65rem;
+}
+
+@media (min-width: 540px) {
+  .home-game-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+.home-game-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.2rem;
+  text-align: left;
+  padding: 0.9rem 0.95rem;
+  border-radius: 0.9rem;
+  background: rgba(196, 168, 255, 0.07);
+  border: 2px solid rgba(196, 168, 255, 0.2);
+  color: #f4f0ff;
+  cursor: pointer;
+  transition:
+    transform 0.15s ease,
+    border-color 0.15s ease,
+    background 0.15s ease,
+    box-shadow 0.2s ease;
+  min-height: 5.5rem;
+}
+
+.home-game-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(196, 168, 255, 0.4);
+}
+
+.home-game-card--active {
+  background: linear-gradient(145deg, rgba(139, 92, 246, 0.35) 0%, rgba(88, 28, 135, 0.45) 100%);
+  border-color: rgba(196, 168, 255, 0.55);
+  box-shadow: 0 10px 32px rgba(88, 28, 135, 0.45);
+}
+
+.home-game-card-emoji {
+  font-size: 1.35rem;
+  line-height: 1;
+}
+
+.home-game-card-title {
+  font-weight: 700;
+  font-size: 0.95rem;
+}
+
+.home-game-card-sub {
+  font-size: 0.72rem;
+  color: #9a87b8;
+  line-height: 1.35;
+}
+
 .input-lg {
   min-height: 3rem;
   font-size: 1rem;
@@ -1196,6 +1269,10 @@ body.party-shake {
   grid-template-columns: 1fr 1fr;
 }
 
+.mode-card-row--triple {
+  grid-template-columns: repeat(3, 1fr);
+}
+
 .mode-card {
   display: flex;
   flex-direction: column;
@@ -1256,6 +1333,10 @@ body.party-shake {
   }
 
   .mode-card-row {
+    grid-template-columns: 1fr;
+  }
+
+  .mode-card-row--triple {
     grid-template-columns: 1fr;
   }
 }
@@ -1416,9 +1497,315 @@ body.party-shake {
   .home-wrap,
   .settings-drawer,
   .mode-card,
+  .home-game-card,
   .btn-primary,
   .btn-secondary {
     animation: none !important;
     transition: none !important;
   }
+}
+
+/* --- Kings Cup --- */
+.kc-root {
+  margin-top: 0.5rem;
+}
+
+.kc-banners {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  margin-bottom: 1rem;
+}
+
+.kc-banner {
+  display: flex;
+  gap: 0.65rem;
+  align-items: flex-start;
+  padding: 0.75rem 0.9rem;
+  border-radius: 0.85rem;
+  border: 1px solid rgba(196, 168, 255, 0.22);
+  background: rgba(26, 18, 40, 0.85);
+}
+
+.kc-banner--rule {
+  border-color: rgba(250, 204, 21, 0.35);
+  background: linear-gradient(135deg, rgba(120, 53, 15, 0.35), rgba(26, 18, 40, 0.9));
+}
+
+.kc-banner--queen {
+  border-color: rgba(236, 72, 153, 0.4);
+  background: rgba(131, 24, 67, 0.25);
+}
+
+.kc-banner--mate {
+  border-color: rgba(52, 211, 153, 0.35);
+}
+
+.kc-banner-emoji {
+  font-size: 1.35rem;
+  line-height: 1;
+}
+
+.kc-banner strong {
+  display: block;
+  font-size: 0.85rem;
+  margin-bottom: 0.15rem;
+}
+
+.kc-banner p {
+  margin: 0;
+  font-size: 0.88rem;
+  color: #d4c4f0;
+  line-height: 1.35;
+}
+
+.kc-table {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.kc-pile {
+  position: relative;
+  min-width: 8rem;
+  min-height: 7rem;
+}
+
+.kc-card-back {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 5.5rem;
+  height: 7.5rem;
+  border-radius: 0.65rem;
+  background: linear-gradient(145deg, #2d1f4a 0%, #1a1228 100%);
+  border: 2px solid rgba(196, 168, 255, 0.35);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+
+.kc-pile-count {
+  position: absolute;
+  left: 6.5rem;
+  top: 50%;
+  transform: translateY(-50%);
+  margin: 0;
+  font-size: 0.9rem;
+  color: #9a87b8;
+  white-space: nowrap;
+}
+
+.kc-turn-pill {
+  padding: 0.5rem 1rem;
+  border-radius: 999px;
+  background: rgba(139, 92, 246, 0.2);
+  border: 1px solid rgba(196, 168, 255, 0.3);
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.kc-turn-pill .muted {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.kc-player-list {
+  list-style: none;
+  margin: 0 0 1rem;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.kc-player-list li {
+  padding: 0.35rem 0.65rem;
+  border-radius: 999px;
+  background: rgba(196, 168, 255, 0.08);
+  border: 1px solid rgba(196, 168, 255, 0.15);
+  font-size: 0.88rem;
+}
+
+.kc-player-list li.kc-pl--turn {
+  background: rgba(139, 92, 246, 0.35);
+  border-color: rgba(196, 168, 255, 0.45);
+  font-weight: 600;
+}
+
+.kc-actions {
+  margin-bottom: 1rem;
+}
+
+.kc-draw-btn {
+  width: 100%;
+}
+
+.kc-wait {
+  text-align: center;
+}
+
+.kc-reveal {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1.25rem;
+  padding: 1.25rem;
+  background: rgba(10, 6, 18, 0.92);
+  backdrop-filter: blur(8px);
+}
+
+.kc-reveal--x {
+  background: radial-gradient(circle at 50% 30%, rgba(127, 29, 29, 0.55), rgba(10, 6, 18, 0.97));
+  animation: kc-x-pulse 2s ease-in-out infinite;
+}
+
+@keyframes kc-x-pulse {
+  0%,
+  100% {
+    filter: brightness(1);
+  }
+  50% {
+    filter: brightness(1.15);
+  }
+}
+
+.kc-flip {
+  perspective: 1000px;
+}
+
+.kc-flip--on .kc-card-face {
+  transform: rotateY(0deg);
+}
+
+.kc-card-face {
+  transform: rotateY(90deg);
+  transition: transform 0.55s cubic-bezier(0.34, 1.56, 0.64, 1);
+  width: min(92vw, 22rem);
+  padding: 1.5rem 1.25rem;
+  border-radius: 1rem;
+  background: linear-gradient(160deg, #2d1f4a 0%, #140e22 100%);
+  border: 2px solid rgba(196, 168, 255, 0.35);
+  text-align: center;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+}
+
+.kc-reveal--x .kc-card-face {
+  border-color: rgba(248, 113, 113, 0.55);
+  box-shadow:
+    0 0 0 2px rgba(185, 28, 28, 0.4),
+    0 24px 60px rgba(127, 29, 29, 0.55);
+}
+
+.kc-card-emoji {
+  font-size: 3rem;
+  display: block;
+  margin-bottom: 0.5rem;
+}
+
+.kc-reveal--x .kc-card-emoji {
+  font-size: 4rem;
+  animation: shake 0.6s ease;
+}
+
+.kc-card-title {
+  margin: 0 0 0.5rem;
+  font-size: 1.5rem;
+}
+
+.kc-card-sub {
+  margin: 0;
+  font-size: 0.95rem;
+  color: #d4c4f0;
+  line-height: 1.4;
+}
+
+.kc-card-drawer {
+  margin: 1rem 0 0;
+  font-size: 0.82rem;
+  color: #9a87b8;
+}
+
+.kc-minigame {
+  margin-top: 1rem;
+  padding: 1rem;
+  border-radius: 1rem;
+  background: rgba(196, 168, 255, 0.08);
+  border: 1px solid rgba(196, 168, 255, 0.2);
+  text-align: center;
+}
+
+.kc-minigame--heaven {
+  background: rgba(59, 130, 246, 0.12);
+  border-color: rgba(96, 165, 250, 0.35);
+}
+
+.kc-minigame--drive {
+  background: rgba(234, 179, 8, 0.1);
+  border-color: rgba(250, 204, 21, 0.35);
+}
+
+.kc-mg-title {
+  margin: 0 0 0.35rem;
+  font-size: 1.15rem;
+}
+
+.kc-drive-step {
+  font-size: 1.5rem;
+  margin: 0.5rem 0 1rem;
+}
+
+.btn-heaven {
+  min-height: 3.5rem;
+  min-width: 12rem;
+  font-size: 1.15rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  border-radius: 0.75rem;
+  border: none;
+  cursor: pointer;
+  color: #0f172a;
+  background: linear-gradient(180deg, #93c5fd 0%, #3b82f6 100%);
+  box-shadow: 0 8px 24px rgba(37, 99, 235, 0.45);
+}
+
+.btn-heaven:active {
+  transform: scale(0.98);
+}
+
+.kc-pick-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: center;
+  margin-top: 0.75rem;
+}
+
+.kc-pick-btn {
+  min-width: 6rem;
+}
+
+.kc-rule-input {
+  width: 100%;
+  margin-bottom: 0.75rem;
+  border-radius: 0.5rem;
+  padding: 0.65rem;
+  font-size: 1rem;
+  background: rgba(10, 6, 18, 0.6);
+  border: 1px solid rgba(196, 168, 255, 0.25);
+  color: #f4f0ff;
+}
+
+.kc-penalty {
+  text-align: center;
+  margin-top: 0.75rem;
+  color: #fca5a5;
+  font-size: 0.95rem;
 }
